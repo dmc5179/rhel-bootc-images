@@ -1,0 +1,20 @@
+# Target: azure — RHEL 10 bootc image customized for Azure.
+# Build context is the repo root (see build-image.sh).
+FROM registry.redhat.io/rhel10/rhel-bootc:latest
+
+# cloud-init handles Azure provisioning (hostname, admin user, SSH key from the portal/API).
+# hyperv-daemons provides KVP/VSS/fcopy integration with the Hyper-V host.
+# WALinuxAgent is optional: add it if you need VM extensions (it defers provisioning to cloud-init).
+RUN --mount=type=bind,source=lib/rhsm-dnf-install.sh,target=/tmp/rhsm-dnf-install.sh,z \
+    --mount=type=secret,id=rhsm_user --mount=type=secret,id=rhsm_pass --mount=type=secret,id=rhsm_org \
+    sh /tmp/rhsm-dnf-install.sh cloud-init hyperv-daemons
+
+# Kernel arguments recommended for Azure (serial console + slow storage tolerance)
+RUN mkdir -p /usr/lib/bootc/kargs.d && \
+    printf '%s\n' 'kargs = ["console=tty1", "console=ttyS0,115200n8", "earlyprintk=ttyS0", "rootdelay=300"]' \
+      > /usr/lib/bootc/kargs.d/10-azure.toml
+
+# Restrict cloud-init to the Azure datasource to avoid slow probing of others
+RUN printf '%s\n' 'datasource_list: [ Azure ]' > /etc/cloud/cloud.cfg.d/90-azure-datasource.cfg
+
+RUN bootc container lint

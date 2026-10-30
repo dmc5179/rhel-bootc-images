@@ -1,0 +1,11 @@
+# Target: generic — plain RHEL 10 bootc image with no platform-specific additions.
+# Useful for local VMs (qcow2), bare metal (raw / anaconda-iso), or as a starting point for a new target.
+# Build context is the repo root (see build-image.sh).
+FROM registry.redhat.io/rhel10/rhel-bootc:latest
+
+# To add RHEL packages, use the shared helper so it works on Fedora and RHEL hosts:
+# RUN --mount=type=bind,source=lib/rhsm-dnf-install.sh,target=/tmp/rhsm-dnf-install.sh,z \
+#     --mount=type=secret,id=rhsm_user --mount=type=secret,id=rhsm_pass --mount=type=secret,id=rhsm_org \
+#     sh /tmp/rhsm-dnf-install.sh <package>...
+
+RUN bootc container lint

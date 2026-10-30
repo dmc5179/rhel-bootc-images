@@ -1,0 +1,9 @@
+# Build artifacts
+output/
+
+# Credentials: never commit
+rhsm_user
+rhsm_pass
+rhsm_org
+rhsm_key
+pull-secret*

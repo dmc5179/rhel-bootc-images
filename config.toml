@@ -1,0 +1,8 @@
+# bootc-image-builder build config.
+# This user is baked into the disk image as a break-glass account, independent
+# of whatever admin user Azure/cloud-init provisions at deploy time.
+
+[[customizations.user]]
+name = "azureuser"
+key = "ssh-ed25519 REPLACE_WITH_YOUR_PUBLIC_KEY"
+groups = ["wheel"]
