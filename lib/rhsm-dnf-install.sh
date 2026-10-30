@@ -21,6 +21,12 @@ set -eu
 
 REGISTERED=0
 RUN_BEFORE=" $(ls -A /run | tr '\n' ' ') "
+# State/log/cache trees where anything created during this step is build residue
+# (RHSM facts/productid/logs, ldconfig cache, ...). Pre-existing entries are kept.
+VAR_STATE_DIRS="/var/cache /var/log /var/lib/rhsm"
+NL='
+'
+VAR_BEFORE="${NL}$(find ${VAR_STATE_DIRS} 2>/dev/null || true)${NL}"
 
 cleanup() {
     if [ "${REGISTERED}" -eq 1 ]; then
@@ -28,8 +34,14 @@ cleanup() {
         subscription-manager clean || true
     fi
     # /var is only seeded at install time on bootc systems; don't ship build-time state in it
-    rm -rf /var/cache/dnf /var/lib/dnf /var/log/dnf*.log /var/log/hawkey.log \
-           /var/log/rhsm /var/lib/rhsm/cache
+    rm -rf /var/cache/dnf /var/lib/dnf /var/log/dnf*.log /var/log/hawkey.log /var/cache/ldconfig/aux-cache
+    # Depth-first so new directories are empty by the time they're reached
+    find ${VAR_STATE_DIRS} -depth 2>/dev/null | while IFS= read -r path; do
+        case "${VAR_BEFORE}" in
+            *"${NL}${path}${NL}"*) ;;
+            *) if [ -d "${path}" ] && [ ! -L "${path}" ]; then rmdir "${path}" 2>/dev/null || true; else rm -f "${path}"; fi ;;
+        esac
+    done
     # /run is runtime-only; drop anything created during this step (leave mounts like /run/secrets)
     for entry in $(ls -A /run); do
         case "${RUN_BEFORE}" in

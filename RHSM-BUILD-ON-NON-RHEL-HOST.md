@@ -95,10 +95,13 @@ control (they're already in `.gitignore`).
 
 ```bash
 sudo podman run --rm -e SMDEV_CONTAINER_OFF=1 localhost/rhel10-<target>:latest bash -c '
+  bootc container lint
   ls -A /etc/pki/consumer /etc/pki/entitlement 2>/dev/null
-  subscription-manager identity 2>&1 | head -1
-  bootc container lint'
+  subscription-manager identity 2>&1 | head -1'
 ```
+
+Run `bootc container lint` **first**: `subscription-manager` itself writes `/run/rhsm`,
+`/var/log/rhsm` and `/var/lib/rhsm/facts`, which would otherwise show up as lint warnings.
 
 You should see no certificate files, a "not registered" message, and lint passing.
 

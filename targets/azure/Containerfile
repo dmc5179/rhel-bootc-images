@@ -9,6 +9,10 @@ RUN --mount=type=bind,source=lib/rhsm-dnf-install.sh,target=/tmp/rhsm-dnf-instal
     --mount=type=secret,id=rhsm_user --mount=type=secret,id=rhsm_pass --mount=type=secret,id=rhsm_org \
     sh /tmp/rhsm-dnf-install.sh cloud-init hyperv-daemons
 
+# Declare the /var directories these packages create (bootc only seeds /var at install time)
+RUN printf '%s\n' 'd /var/lib/cloud 0755 root root - -' 'd /var/lib/hyperv 0755 root root - -' \
+      > /usr/lib/tmpfiles.d/azure-bootc.conf
+
 # Kernel arguments recommended for Azure (serial console + slow storage tolerance)
 RUN mkdir -p /usr/lib/bootc/kargs.d && \
     printf '%s\n' 'kargs = ["console=tty1", "console=ttyS0,115200n8", "earlyprintk=ttyS0", "rootdelay=300"]' \

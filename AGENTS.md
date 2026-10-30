@@ -37,6 +37,10 @@ The working directory is still named `composer-cli`; the user will rename it to
   detects the string `rhsm-dnf-install` in a target's Containerfile to decide whether to prompt
   for credentials. Bind mounts from the build context need the `,z` option, or SELinux denies access.
 - **Every target ends with `RUN bootc container lint`.** Keep `/var` and `/run` clean in image layers.
+  The only expected lint warning is `var/roothome/buildinfo/content-sets.json` from the base image.
+  When verifying an image, run `bootc container lint` before any `subscription-manager` command,
+  which writes `/run/rhsm` and `/var/lib/rhsm` itself. Packages that create `/var` dirs need
+  `/usr/lib/tmpfiles.d` entries in the target Containerfile.
 - **Parse `qemu-img info` JSON with `jq` using top-level keys only.** qemu 8+ adds nested
   `children` entries with their own `format`/`virtual-size`, which breaks grep-based parsing.
 - **Don't resize VHDs in place.** qemu's `vpc` driver doesn't support resize. Convert to raw,
@@ -58,7 +62,6 @@ The working directory is still named `composer-cli`; the user will rename it to
 
 Keep this list current: check items off when done, add new ones as they come up.
 
-- [ ] Real rebuild of `--target azure` with the refactored layout; confirm `bootc container lint` shows no `/var`/`/run` warnings
 - [ ] First real build of `--target generic`
 - [ ] Decide whether to keep `config.toml` (break-glass user) or delete it
 - [ ] Decide whether to add `WALinuxAgent` to `targets/azure/Containerfile` (needed for Azure VM extensions)
@@ -78,3 +81,4 @@ Keep this list current: check items off when done, add new ones as they come up.
 - [x] First end-to-end Azure build on Fedora 44 succeeded (2026-10-30): fixed VHD, 10 GiB virtual / ~1.8 GB allocated, 1 MB aligned; image verified (packages present, no RHSM identity), lint passed with 3 `/var`/`/run` warnings
 - [x] Refactor into generic `rhel-bootc-images` layout: `build-image.sh` with `--target`/`--type`, `targets/{azure,generic}`, shared `lib/rhsm-dnf-install.sh` (with `/var`/`/run` cleanup), README, `.gitignore`; moved existing VHD to `output/azure/`
 - [x] Published as public repo https://github.com/dmc5179/rhel-bootc-images (2026-10-30)
+- [x] Rebuilt `--target azure` with refactored layout (2026-10-30): lint down to 1 warning, `var/roothome/buildinfo/content-sets.json`, which ships in the Red Hat base image (expected, not ours)
