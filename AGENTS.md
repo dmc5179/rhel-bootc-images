@@ -66,7 +66,6 @@ Keep this list current: check items off when done, add new ones as they come up.
 - [ ] Document sparse-preserving transfer (e.g. `tar -Sczf` / zstd), since the fixed VHD is 10 GiB but only ~1.8 GB allocated
 - [ ] Document the Azure side: upload the VHD (azcopy / page blob), create the image (Gen1 vs Gen2), launch a VM with an Azure-generated SSH key, and check that cloud-init provisioning works
 - [ ] Consider more targets (e.g. `aws` → `ami`, `gce`, `vmware` → `vmdk`)
-- [ ] `git init` and push as `rhel-bootc-images` (`.gitignore` is in place)
 
 ### Done
 
@@ -78,3 +77,4 @@ Keep this list current: check items off when done, add new ones as they come up.
 - [x] Add `rhsm-credentials.sh` with RHSM API validation and org lookup
 - [x] First end-to-end Azure build on Fedora 44 succeeded (2026-10-30): fixed VHD, 10 GiB virtual / ~1.8 GB allocated, 1 MB aligned; image verified (packages present, no RHSM identity), lint passed with 3 `/var`/`/run` warnings
 - [x] Refactor into generic `rhel-bootc-images` layout: `build-image.sh` with `--target`/`--type`, `targets/{azure,generic}`, shared `lib/rhsm-dnf-install.sh` (with `/var`/`/run` cleanup), README, `.gitignore`; moved existing VHD to `output/azure/`
+- [x] Published as public repo https://github.com/dmc5179/rhel-bootc-images (2026-10-30)
