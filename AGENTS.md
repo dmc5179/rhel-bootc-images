@@ -67,7 +67,6 @@ Keep this list current: check items off when done, add new ones as they come up.
 - [ ] Decide whether to add `WALinuxAgent` to `targets/azure/Containerfile` (needed for Azure VM extensions)
 - [ ] Boot-test the Azure VHD locally (e.g. libvirt/qemu) before transfer
 - [ ] Document sparse-preserving transfer (e.g. `tar -Sczf` / zstd), since the fixed VHD is 10 GiB but only ~1.8 GB allocated
-- [ ] Document the Azure side: upload the VHD (azcopy / page blob), create the image (Gen1 vs Gen2), launch a VM with an Azure-generated SSH key, and check that cloud-init provisioning works
 - [ ] Consider more targets (e.g. `aws` → `ami`, `gce`, `vmware` → `vmdk`)
 
 ### Done
@@ -82,3 +81,4 @@ Keep this list current: check items off when done, add new ones as they come up.
 - [x] Refactor into generic `rhel-bootc-images` layout: `build-image.sh` with `--target`/`--type`, `targets/{azure,generic}`, shared `lib/rhsm-dnf-install.sh` (with `/var`/`/run` cleanup), README, `.gitignore`; moved existing VHD to `output/azure/`
 - [x] Published as public repo https://github.com/dmc5179/rhel-bootc-images (2026-10-30)
 - [x] Rebuilt `--target azure` with refactored layout (2026-10-30): lint down to 1 warning, `var/roothome/buildinfo/content-sets.json`, which ships in the Red Hat base image (expected, not ours)
+- [x] Azure-side steps (upload, image creation, VM launch, cloud-init check) are documented in a separate repo of the user's; out of scope here
