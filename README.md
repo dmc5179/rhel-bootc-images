@@ -32,6 +32,7 @@ rhsm-credentials.sh         Prompt for and cache RHSM credentials (--status, --c
 lib/rhsm-dnf-install.sh     Shared in-build package installer (register → dnf → unregister → clean)
 targets/<name>/Containerfile  Image definition for a target
 targets/<name>/target.conf    DEFAULT_TYPES for the target
+targets/<name>/upload.sh      Optional upload/import script (aws, vmware)
 config.toml                 Optional bootc-image-builder config (break-glass user), used with --config
 ```
 
@@ -40,7 +41,24 @@ config.toml                 Optional bootc-image-builder config (break-glass use
 | Target | Default type | Adds |
 |---|---|---|
 | `azure` | `vhd` | cloud-init (Azure datasource), hyperv-daemons, Azure kernel args |
+| `aws` | `ami` | cloud-init (EC2 datasource), EC2 serial console and NVMe timeout kernel args |
+| `vmware` | `vmdk` | cloud-init (VMware guestinfo datasource), open-vm-tools |
 | `generic` | `qcow2` | Nothing; plain `rhel-bootc` |
+
+All cloud targets enable `cloud-init.target` explicitly, since installing the package in a
+container build doesn't enable it.
+
+### Uploading
+
+Some targets include an `upload.sh`. Settings go in `targets/<name>/upload.env` (gitignored;
+copy `upload.env.example`). Credentials are never stored in the repo.
+
+| Target | Script | Does | Needs |
+|---|---|---|---|
+| `aws` | `targets/aws/upload.sh` | S3 upload → `import-snapshot` → `register-image` (UEFI-preferred, ENA, IMDSv2) | AWS CLI profile, S3 bucket, `vmimport` IAM role |
+| `vmware` | `targets/vmware/upload.sh` | `govc import.vmdk` → `vm.create` (EFI, pvscsi, vmxnet3) → optional cloud-init user-data via guestinfo | `govc`, vCenter login (password prompted) |
+
+For Azure, the upload steps live in a separate repo.
 
 ### Adding a target
 

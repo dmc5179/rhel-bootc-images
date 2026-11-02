@@ -19,6 +19,7 @@ The working directory is still named `composer-cli`; the user will rename it to
 | `build-image.sh` | Main entry point. `--target NAME` (required) builds `targets/NAME/Containerfile` into `localhost/rhel10-NAME:latest` (context = repo root), then runs bootc-image-builder for each `--type` (default from `target.conf`). Pulls use the pull secret via `--authfile`. Output goes to `output/NAME/`; VHDs get Azure format/alignment checks. `--list-targets`, `-h`. |
 | `targets/<name>/Containerfile` | Image definition per target. `azure`: cloud-init (Azure datasource), hyperv-daemons, Azure kargs. `generic`: plain `rhel-bootc`. |
 | `targets/<name>/target.conf` | `DEFAULT_TYPES="..."` for the target. |
+| `targets/{aws,vmware}/upload.sh` | Draft upload scripts. AWS: S3 → `import-snapshot` → `register-image`. VMware: `govc import.vmdk` → `vm.create` → optional cloud-init guestinfo. Settings come from gitignored `upload.env` (template `upload.env.example`); the vCenter password is prompted for. |
 | `lib/rhsm-dnf-install.sh` | Shared in-build package installer, bind-mounted into `RUN` steps. With secrets: register → dnf → unregister/clean (EXIT trap). Without: plain dnf. Always cleans dnf/RHSM state from `/var` and new `/run` entries for `bootc container lint`. |
 | `rhsm-credentials.sh` | Prompts for Red Hat username/password, verifies them and looks up the org via the RHSM API (needs `/etc/rhsm/ca/redhat-uep.pem`; otherwise cached unverified), and caches them in `$XDG_RUNTIME_DIR/rhsm-build/` (tmpfs). `--status`, `--clear`. `build-image.sh` calls it automatically on non-RHEL hosts when the target uses the helper. |
 | `config.toml` | Optional bootc-image-builder config with a break-glass user. Used **only** with `--config`. Holds a placeholder SSH key, which the script refuses to build with. |
@@ -36,6 +37,11 @@ The working directory is still named `composer-cli`; the user will rename it to
 - **Targets install RHEL packages only through `lib/rhsm-dnf-install.sh`.** `build-image.sh`
   detects the string `rhsm-dnf-install` in a target's Containerfile to decide whether to prompt
   for credentials. Bind mounts from the build context need the `,z` option, or SELinux denies access.
+- **Cloud targets must enable cloud-init explicitly**: symlink `cloud-init.target` into
+  `/usr/lib/systemd/system/default.target.wants/` (Red Hat docs pattern). Installing the package in
+  a container build does not enable it. Same for other services (e.g. `systemctl enable vmtoolsd`).
+- **Upload settings and credentials stay out of git**: `targets/*/upload.env` and
+  `targets/*/user-data.yaml` are gitignored. AWS uses CLI profiles; never store keys.
 - **Every target ends with `RUN bootc container lint`.** Keep `/var` and `/run` clean in image layers.
   The only expected lint warning is `var/roothome/buildinfo/content-sets.json` from the base image.
   When verifying an image, run `bootc container lint` before any `subscription-manager` command,
@@ -67,7 +73,11 @@ Keep this list current: check items off when done, add new ones as they come up.
 - [ ] Decide whether to add `WALinuxAgent` to `targets/azure/Containerfile` (needed for Azure VM extensions)
 - [ ] Boot-test the Azure VHD locally (e.g. libvirt/qemu) before transfer
 - [ ] Document sparse-preserving transfer (e.g. `tar -Sczf` / zstd), since the fixed VHD is 10 GiB but only ~1.8 GB allocated
-- [ ] Consider more targets (e.g. `aws` → `ami`, `gce`, `vmware` → `vmdk`)
+- [ ] Verify the existing Azure image has cloud-init enabled; rebuild `--target azure` with the explicit `cloud-init.target` enable
+- [ ] First real build of `--target aws` and `--target vmware` (check lint is clean)
+- [ ] Test `targets/aws/upload.sh` once AWS account access is available (needs the `vmimport` role and an S3 bucket); confirm UEFI-preferred boot and SSH as `cloud-user`
+- [ ] Test `targets/vmware/upload.sh` once vCenter access is available; confirm EFI + pvscsi boot (fall back to `VM_FIRMWARE=bios`/`VM_DISK_CONTROLLER=lsilogic` if not), and check the `rhel10_64Guest` guest ID availability
+- [ ] Consider a `gce` target
 
 ### Done
 

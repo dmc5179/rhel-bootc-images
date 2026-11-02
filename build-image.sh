@@ -280,4 +280,5 @@ done
 echo "=========================================================="
 echo "Build complete! Target: ${TARGET}"
 echo "Artifacts: ${OUTPUT_DIR}"
+[[ -x "${TARGET_DIR}/upload.sh" ]] && echo "Upload:    ${TARGET_DIR#"${SCRIPT_DIR}/"}/upload.sh (see --help)"
 echo "=========================================================="
