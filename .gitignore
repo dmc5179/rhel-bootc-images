@@ -11,3 +11,5 @@ pull-secret*
 # Local upload settings (account details) and cloud-init user-data
 targets/*/upload.env
 targets/*/user-data.yaml
+
+secrets/*
