@@ -1,0 +1,36 @@
+# Target: aws-fips — RHEL 10 bootc image for Amazon EC2 with FIPS mode enabled.
+# Same as targets/aws plus FIPS, following "Enabling FIPS mode in a bootc image build"
+# (RHEL 10 "Using image mode for RHEL", chapter 11). RHEL 10 has no fips-mode-setup and can't
+# switch to FIPS after installation, so it must be baked into the image.
+# Build context is the repo root (see build-image.sh).
+FROM registry.redhat.io/rhel10/rhel-bootc:latest
+
+# cloud-init handles EC2 provisioning (hostname, default user, SSH key pair from instance metadata).
+# crypto-policies-scripts provides update-crypto-policies (not installed by default in RHEL 10).
+RUN --mount=type=bind,source=lib/rhsm-dnf-install.sh,target=/tmp/rhsm-dnf-install.sh,z \
+    --mount=type=secret,id=rhsm_user --mount=type=secret,id=rhsm_pass --mount=type=secret,id=rhsm_org \
+    sh /tmp/rhsm-dnf-install.sh cloud-init crypto-policies-scripts
+
+# FIPS: fips=1 kernel argument, applied at install/first boot from kargs.d
+RUN mkdir -p /usr/lib/bootc/kargs.d && \
+    printf '%s\n' '# Enable FIPS' 'kargs = ["fips=1"]' > /usr/lib/bootc/kargs.d/01-fips.toml
+
+# FIPS: system-wide cryptographic policy
+RUN update-crypto-policies --no-reload --set FIPS
+
+# cloud-init isn't enabled by package install in a container build; enable it explicitly (per Red Hat docs)
+RUN mkdir -p /usr/lib/systemd/system/default.target.wants && \
+    ln -sf /usr/lib/systemd/system/cloud-init.target /usr/lib/systemd/system/default.target.wants/cloud-init.target
+
+# Declare the /var directories these packages create (bootc only seeds /var at install time)
+RUN printf '%s\n' 'd /var/lib/cloud 0755 root root - -' > /usr/lib/tmpfiles.d/aws-bootc.conf
+
+# Kernel arguments for EC2: serial console (EC2 serial console / get-console-output) and
+# never time out NVMe I/O, since EBS volumes are NVMe devices on Nitro instances
+RUN printf '%s\n' 'kargs = ["console=tty0", "console=ttyS0,115200n8", "nvme_core.io_timeout=4294967295"]' \
+      > /usr/lib/bootc/kargs.d/10-aws.toml
+
+# Restrict cloud-init to the EC2 datasource to avoid slow probing of others
+RUN printf '%s\n' 'datasource_list: [ Ec2, None ]' > /etc/cloud/cloud.cfg.d/90-aws-datasource.cfg
+
+RUN bootc container lint

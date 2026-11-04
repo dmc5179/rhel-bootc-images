@@ -42,6 +42,7 @@ config.toml                 Optional bootc-image-builder config (break-glass use
 |---|---|---|
 | `azure` | `vhd` | cloud-init (Azure datasource), hyperv-daemons, Azure kernel args |
 | `aws` | `ami` | cloud-init (EC2 datasource), EC2 serial console and NVMe timeout kernel args |
+| `aws-fips` | `ami` | Same as `aws`, plus FIPS mode: `fips=1` kernel arg and the `FIPS` crypto policy |
 | `vmware` | `vmdk` | cloud-init (VMware guestinfo datasource), open-vm-tools |
 | `generic` | `qcow2` | Nothing; plain `rhel-bootc` |
 
@@ -55,7 +56,7 @@ copy `upload.env.example`). Credentials are never stored in the repo.
 
 | Target | Script | Does | Needs |
 |---|---|---|---|
-| `aws` | `targets/aws/upload.sh` | S3 upload → `import-snapshot` → `register-image` (UEFI-preferred, ENA, IMDSv2) | AWS CLI profile, S3 bucket, `vmimport` IAM role |
+| `aws`, `aws-fips` | `targets/aws/upload.sh` (`aws-fips/upload.sh` links to it) | S3 upload → `import-snapshot` → `register-image` (UEFI-preferred, ENA, IMDSv2) | AWS CLI profile, S3 bucket, `vmimport` IAM role |
 | `vmware` | `targets/vmware/upload.sh` | `govc import.vmdk` → `vm.create` (EFI, pvscsi, vmxnet3) → optional cloud-init user-data via guestinfo | `govc`, vCenter login (password prompted) |
 
 For Azure, the upload steps live in a separate repo.
