@@ -27,6 +27,7 @@ AMI_NAME="${AMI_NAME:-rhel10-bootc-${TARGET}-$(date +%Y%m%d-%H%M%S)}"
 S3_KEY="${S3_KEY:-bootc-imports/${AMI_NAME}.raw}"
 ARCH="${ARCH:-x86_64}"
 KEEP_S3_OBJECT="${KEEP_S3_OBJECT:-false}"
+COPY_TO_REGIONS="${COPY_TO_REGIONS:-}"
 
 usage() {
     cat <<EOF
@@ -40,6 +41,7 @@ Settings (env vars or ${ENV_FILE}):
   IMAGE            Default: output/${TARGET}/image/disk.raw
   ARCH             x86_64 (default) or arm64
   KEEP_S3_OBJECT   true to keep the raw image in S3 after import (default: false)
+  COPY_TO_REGIONS  Space-separated regions to copy the AMI to after registering, e.g. "us-east-2"
 
 Prerequisite: the account needs the 'vmimport' service role that VM Import/Export uses
 to read from S3. See the AWS "VM Import/Export required service role" docs.
@@ -108,7 +110,34 @@ if [[ "${KEEP_S3_OBJECT}" != "true" ]]; then
     aws s3 rm "s3://${AWS_S3_BUCKET}/${S3_KEY}"
 fi
 
+# 6. Optional copies to other regions (copy-image needs the source AMI to be available)
+declare -A COPIES=()
+if [[ -n "${COPY_TO_REGIONS}" ]]; then
+    echo "[6/6] Copying ${AMI_ID} to: ${COPY_TO_REGIONS}"
+    aws ec2 wait image-available --image-ids "${AMI_ID}"
+    for region in ${COPY_TO_REGIONS}; do
+        [[ "${region}" != "${AWS_REGION}" ]] || continue
+        COPIES[${region}]=$(aws ec2 copy-image --region "${region}" \
+            --source-region "${AWS_REGION}" --source-image-id "${AMI_ID}" \
+            --name "${AMI_NAME}" --description "Copy of ${AMI_ID} from ${AWS_REGION}" \
+            --query 'ImageId' --output text)
+        echo "  - ${region}: ${COPIES[${region}]} (copying)"
+    done
+    for region in "${!COPIES[@]}"; do
+        # The waiter gives up after ~10 minutes; copies can take longer, so retry until it succeeds
+        until aws ec2 wait image-available --region "${region}" --image-ids "${COPIES[${region}]}" 2>/dev/null; do
+            state=$(aws ec2 describe-images --region "${region}" --image-ids "${COPIES[${region}]}" \
+                --query 'Images[0].State' --output text)
+            [[ "${state}" == "pending" ]] || { echo "[ERROR] Copy to ${region} ended in state '${state}'"; exit 1; }
+        done
+        echo "  - ${region}: ${COPIES[${region}]} available"
+    done
+fi
+
 echo "=========================================================="
 echo "AMI registered: ${AMI_ID} (${AMI_NAME}) in ${AWS_REGION}"
+for region in "${!COPIES[@]}"; do
+    echo "AMI copied:     ${COPIES[${region}]} in ${region}"
+done
 echo "Launch with your EC2 key pair; cloud-init creates the default user 'cloud-user'."
 echo "=========================================================="

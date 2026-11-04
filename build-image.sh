@@ -25,7 +25,7 @@ list_targets() {
         local name default=""
         name="$(basename "${dir}")"
         [[ -f "${dir}target.conf" ]] && default="$(. "${dir}target.conf" && echo "${DEFAULT_TYPES:-}")"
-        printf '  %-12s default type: %s\n' "${name}" "${default:-qcow2}"
+        printf '  %-18s default type: %s\n' "${name}" "${default:-qcow2}"
     done
 }
 
@@ -137,6 +137,18 @@ fi
 LOCAL_IMAGE="localhost/rhel10-${TARGET}:latest"
 OUTPUT_DIR="${SCRIPT_DIR}/output/${TARGET}"
 
+# Targets can layer on another target (PARENT_TARGET in target.conf, with the Containerfile
+# starting FROM localhost/rhel10-<parent>:latest). Build the chain root-first.
+BUILD_CHAIN=("${TARGET}")
+while :; do
+    parent="$(PARENT_TARGET=""; [[ -f "${TARGETS_DIR}/${BUILD_CHAIN[0]}/target.conf" ]] \
+        && . "${TARGETS_DIR}/${BUILD_CHAIN[0]}/target.conf"; echo "${PARENT_TARGET:-}")"
+    [[ -n "${parent}" ]] || break
+    [[ -f "${TARGETS_DIR}/${parent}/Containerfile" ]] || { echo "[ERROR] ${BUILD_CHAIN[0]}: unknown PARENT_TARGET '${parent}'"; exit 1; }
+    [[ " ${BUILD_CHAIN[*]} " != *" ${parent} "* ]] || { echo "[ERROR] PARENT_TARGET loop at '${parent}'"; exit 1; }
+    BUILD_CHAIN=("${parent}" "${BUILD_CHAIN[@]}")
+done
+
 if [[ -n "${CONFIG_TOML}" ]]; then
     [[ -f "${CONFIG_TOML}" ]] || { echo "[ERROR] Config file not found: ${CONFIG_TOML}"; exit 1; }
     CONFIG_TOML="$(realpath "${CONFIG_TOML}")"
@@ -153,12 +165,15 @@ if [[ -n "${CONFIG_TOML}" ]] && grep -q 'REPLACE_WITH_YOUR_PUBLIC_KEY' "${CONFIG
 fi
 
 echo "Target: ${TARGET}    Types: ${TYPES[*]}    Image: ${LOCAL_IMAGE}"
+(( ${#BUILD_CHAIN[@]} > 1 )) && echo "Build chain: ${BUILD_CHAIN[*]}"
 
 # 2. Credentials
 # If the target installs RHEL packages on a non-RHEL host, the build needs RHSM credentials
 # (RPM content), passed as build secrets. These are NOT used for registry.redhat.io.
 HOST_ID=$(. /etc/os-release && echo "${ID}")
-if grep -q 'rhsm-dnf-install' "${CONTAINERFILE}" && [[ "${HOST_ID}" != "rhel" ]] \
+CHAIN_CONTAINERFILES=()
+for t in "${BUILD_CHAIN[@]}"; do CHAIN_CONTAINERFILES+=("${TARGETS_DIR}/${t}/Containerfile"); done
+if grep -q 'rhsm-dnf-install' "${CHAIN_CONTAINERFILES[@]}" && [[ "${HOST_ID}" != "rhel" ]] \
    && [[ ! -s "${RHSM_SECRETS_DIR}/rhsm_user" || ! -s "${RHSM_SECRETS_DIR}/rhsm_pass" ]]; then
     echo "[0/5] Non-RHEL host (${HOST_ID}): Red Hat credentials are needed to install RHEL packages in the build."
     "${RHSM_HELPER}"
@@ -185,17 +200,22 @@ else
     exit 1
 fi
 
-# 3. Build the target image in root's container storage (context = repo root, for lib/)
-echo "[2/5] Building ${LOCAL_IMAGE} from ${CONTAINERFILE}..."
+# 3. Build the target image (and any parents) in root's container storage (context = repo root, for lib/)
 SECRET_ARGS=()
 for secret in rhsm_user rhsm_pass rhsm_org; do
     if [[ -s "${RHSM_SECRETS_DIR}/${secret}" ]]; then
         SECRET_ARGS+=(--secret "id=${secret},src=${RHSM_SECRETS_DIR}/${secret}")
     fi
 done
-(( ${#SECRET_ARGS[@]} > 0 )) && echo "  - Passing cached RHSM credentials as build secrets"
-sudo podman build --pull=newer "${AUTH_ARGS[@]}" "${SECRET_ARGS[@]}" \
-    -t "${LOCAL_IMAGE}" -f "${CONTAINERFILE}" "${SCRIPT_DIR}"
+for t in "${BUILD_CHAIN[@]}"; do
+    echo "[2/5] Building localhost/rhel10-${t}:latest from targets/${t}/Containerfile..."
+    (( ${#SECRET_ARGS[@]} > 0 )) && echo "  - Passing cached RHSM credentials as build secrets"
+    # Children start FROM a parent image that was just built locally, so don't try to pull it
+    PULL_POLICY="newer"
+    [[ "${t}" == "${BUILD_CHAIN[0]}" ]] || PULL_POLICY="never"
+    sudo podman build --pull="${PULL_POLICY}" "${AUTH_ARGS[@]}" "${SECRET_ARGS[@]}" \
+        -t "localhost/rhel10-${t}:latest" -f "${TARGETS_DIR}/${t}/Containerfile" "${SCRIPT_DIR}"
+done
 
 mkdir -p "${OUTPUT_DIR}"
 

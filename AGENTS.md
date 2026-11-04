@@ -18,8 +18,8 @@ The working directory is still named `composer-cli`; the user will rename it to
 |---|---|
 | `build-image.sh` | Main entry point. `--target NAME` (required) builds `targets/NAME/Containerfile` into `localhost/rhel10-NAME:latest` (context = repo root), then runs bootc-image-builder for each `--type` (default from `target.conf`). Pulls use the pull secret via `--authfile`. Output goes to `output/NAME/`; VHDs get Azure format/alignment checks. `--list-targets`, `-h`. |
 | `targets/<name>/Containerfile` | Image definition per target. `azure`: cloud-init (Azure datasource), hyperv-daemons, Azure kargs. `generic`: plain `rhel-bootc`. |
-| `targets/<name>/target.conf` | `DEFAULT_TYPES="..."` for the target. |
-| `targets/{aws,vmware}/upload.sh` | Upload scripts. AWS (shared by `aws` and `aws-fips` via symlink; the target comes from the invoking directory): S3 → `import-snapshot` → `register-image`. VMware: `govc import.vmdk` → `vm.create` → optional cloud-init guestinfo. Settings come from gitignored `upload.env` (template `upload.env.example`); the vCenter password is prompted for. |
+| `targets/<name>/target.conf` | `DEFAULT_TYPES="..."` for the target; optional `PARENT_TARGET="..."` to layer on another target (built first; child Containerfile starts `FROM localhost/rhel10-<parent>:latest`). |
+| `targets/{aws,vmware}/upload.sh` | Upload scripts. AWS (shared by all `aws*` targets via symlink; the target comes from the invoking directory): S3 → `import-snapshot` → `register-image` → optional `copy-image` to `COPY_TO_REGIONS`. VMware: `govc import.vmdk` → `vm.create` → optional cloud-init guestinfo. Settings come from gitignored `upload.env` (template `upload.env.example`); the vCenter password is prompted for. |
 | `lib/rhsm-dnf-install.sh` | Shared in-build package installer, bind-mounted into `RUN` steps. With secrets: register → dnf → unregister/clean (EXIT trap). Without: plain dnf. Always cleans dnf/RHSM state from `/var` and new `/run` entries for `bootc container lint`. |
 | `rhsm-credentials.sh` | Prompts for Red Hat username/password, verifies them and looks up the org via the RHSM API (needs `/etc/rhsm/ca/redhat-uep.pem`; otherwise cached unverified), and caches them in `$XDG_RUNTIME_DIR/rhsm-build/` (tmpfs). `--status`, `--clear`. `build-image.sh` calls it automatically on non-RHEL hosts when the target uses the helper. |
 | `config.toml` | Optional bootc-image-builder config with a break-glass user. Used **only** with `--config`. Holds a placeholder SSH key, which the script refuses to build with. |
@@ -47,6 +47,13 @@ The working directory is still named `composer-cli`; the user will rename it to
   `/usr/lib/bootc/kargs.d/01-fips.toml`, install `crypto-policies-scripts`, and run
   `update-crypto-policies --no-reload --set FIPS`. To check a built disk image without root, grep
   its `/boot` partition bytes for the BLS `options` line containing `fips=1`.
+- **Read-only `/usr/local` and `/opt` are RHEL 10 base-image behaviour**, not ours (real dirs in
+  the image; the base ships `/var/usrlocal`, `/var/opt` tmpfiles and SELinux equivalences for the
+  old link model). Only `aws-fips-bastion` restores the links. Root auto-grow comes from the base
+  image's `bootc-generic-growpart.service`.
+- **Check package names before adding them**: rootless `podman run -v $XDG_RUNTIME_DIR/rhsm-build:/run/secrets:ro,z`
+  on `rhel10/rhel-bootc`, register, `dnf repoquery --available`, unregister. (`podman run --secret`
+  doesn't take `id=,src=` like `podman build`.)
 - **Every target ends with `RUN bootc container lint`.** Keep `/var` and `/run` clean in image layers.
   The only expected lint warning is `var/roothome/buildinfo/content-sets.json` from the base image.
   When verifying an image, run `bootc container lint` before any `subscription-manager` command,
@@ -98,3 +105,5 @@ Keep this list current: check items off when done, add new ones as they come up.
 - [x] Rebuilt `--target azure` with refactored layout (2026-10-30): lint down to 1 warning, `var/roothome/buildinfo/content-sets.json`, which ships in the Red Hat base image (expected, not ours)
 - [x] Azure-side steps (upload, image creation, VM launch, cloud-init check) are documented in a separate repo of the user's; out of scope here
 - [x] Built `--target aws-fips` and registered the AMI in us-east-1 (2026-11-03); `fips=1` confirmed in the disk image's BLS entry. Created IAM role `vmimport` (S3 access limited to the upload bucket); `targets/aws/upload.sh` worked end to end
+- [x] Built `--target aws-fips-bastion` (2026-11-04) in response to the openshift5-disconnected review, registered it directly in us-east-2 via a dedicated import bucket, and sent them the AMI details
+- [x] openshift5-disconnected verified the `aws-fips-bastion` AMI on m6i.2xlarge (2026-11-04): fips_enabled=1, FIPS policy, `/usr/local` and `/opt` writable via `/var` links, sudo secure_path, all tools present, IMDSv2 enforced, SELinux enforcing, root grew to the volume size. Now their default RHEL 10 test-host AMI

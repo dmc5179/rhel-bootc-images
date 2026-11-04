@@ -22,8 +22,8 @@ set -eu
 REGISTERED=0
 RUN_BEFORE=" $(ls -A /run | tr '\n' ' ') "
 # State/log/cache trees where anything created during this step is build residue
-# (RHSM facts/productid/logs, ldconfig cache, ...). Pre-existing entries are kept.
-VAR_STATE_DIRS="/var/cache /var/log /var/lib/rhsm"
+# (RHSM facts/productid/logs, ldconfig cache, root dotfiles, ...). Pre-existing entries are kept.
+VAR_STATE_DIRS="/var/cache /var/log /var/lib/rhsm /var/roothome"
 NL='
 '
 VAR_BEFORE="${NL}$(find ${VAR_STATE_DIRS} 2>/dev/null || true)${NL}"

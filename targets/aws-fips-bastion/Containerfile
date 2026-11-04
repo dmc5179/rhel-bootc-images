@@ -1,0 +1,30 @@
+# Target: aws-fips-bastion — the aws-fips image plus bastion/registry-host tooling.
+# Layers on the aws-fips image (PARENT_TARGET in target.conf); build-image.sh builds it first.
+# Build context is the repo root (see build-image.sh).
+FROM localhost/rhel10-aws-fips:latest
+
+# Tooling for disconnected OpenShift installs and general admin work.
+# nmstate provides nmstatectl, which `openshift-install agent create image` needs when
+# agent-config sets networkConfig. OpenShift clients stay out (they're version-specific).
+RUN --mount=type=bind,source=lib/rhsm-dnf-install.sh,target=/tmp/rhsm-dnf-install.sh,z \
+    --mount=type=secret,id=rhsm_user --mount=type=secret,id=rhsm_pass --mount=type=secret,id=rhsm_org \
+    sh /tmp/rhsm-dnf-install.sh wget unzip nmstate xorriso tmux vim-enhanced git python3-pip awscli2 bash-completion
+
+# Writable /usr/local and /opt. RHEL 10 bootc base images keep both as read-only image
+# content; restore the traditional links into /var (the base image already creates
+# /var/usrlocal and /var/opt via tmpfiles and maps their SELinux labels to /usr/local and /opt).
+# Lets tools install into /usr/local/bin (OpenShift clients, AWS installers) and /opt (mirror-registry).
+RUN test -z "$(find /usr/local /opt -mindepth 1 ! -type d)" \
+        || { echo "Refusing to replace non-empty /usr/local or /opt" >&2; find /usr/local /opt ! -type d >&2; exit 1; } && \
+    rm -rf /usr/local /opt && \
+    ln -s ../var/usrlocal /usr/local && \
+    ln -s var/opt /opt && \
+    printf '%s\n' 'd /var/usrlocal/bin 0755 root root - -' 'd /var/usrlocal/sbin 0755 root root - -' \
+      > /usr/lib/tmpfiles.d/bastion-usrlocal.conf
+
+# Let sudo find tools installed into /usr/local
+RUN printf '%s\n' 'Defaults    secure_path = /usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin' \
+      > /etc/sudoers.d/10-secure-path-usrlocal && \
+    chmod 0440 /etc/sudoers.d/10-secure-path-usrlocal
+
+RUN bootc container lint

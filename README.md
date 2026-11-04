@@ -43,6 +43,7 @@ config.toml                 Optional bootc-image-builder config (break-glass use
 | `azure` | `vhd` | cloud-init (Azure datasource), hyperv-daemons, Azure kernel args |
 | `aws` | `ami` | cloud-init (EC2 datasource), EC2 serial console and NVMe timeout kernel args |
 | `aws-fips` | `ami` | Same as `aws`, plus FIPS mode: `fips=1` kernel arg and the `FIPS` crypto policy |
+| `aws-fips-bastion` | `ami` | Layers on `aws-fips` (`PARENT_TARGET`): writable `/usr/local` and `/opt`, sudo `secure_path` with `/usr/local/bin`, and bastion tools (`wget`, `unzip`, `nmstate`, `xorriso`, `tmux`, `vim-enhanced`, `git`, `python3-pip`, `awscli2`, `bash-completion`) |
 | `vmware` | `vmdk` | cloud-init (VMware guestinfo datasource), open-vm-tools |
 | `generic` | `qcow2` | Nothing; plain `rhel-bootc` |
 
@@ -56,10 +57,28 @@ copy `upload.env.example`). Credentials are never stored in the repo.
 
 | Target | Script | Does | Needs |
 |---|---|---|---|
-| `aws`, `aws-fips` | `targets/aws/upload.sh` (`aws-fips/upload.sh` links to it) | S3 upload → `import-snapshot` → `register-image` (UEFI-preferred, ENA, IMDSv2) | AWS CLI profile, S3 bucket, `vmimport` IAM role |
+| `aws`, `aws-fips`, `aws-fips-bastion` | `targets/aws/upload.sh` (the others link to it); `COPY_TO_REGIONS` copies the AMI to more regions | S3 upload → `import-snapshot` → `register-image` (UEFI-preferred, ENA, IMDSv2) | AWS CLI profile, S3 bucket, `vmimport` IAM role |
 | `vmware` | `targets/vmware/upload.sh` | `govc import.vmdk` → `vm.create` (EFI, pvscsi, vmxnet3) → optional cloud-init user-data via guestinfo | `govc`, vCenter login (password prompted) |
 
 For Azure, the upload steps live in a separate repo.
+
+### Image mode behaviour on a running system
+
+These are by design in RHEL 10 image mode, not build problems:
+
+- **Read-only `/usr`, including `/usr/local` and `/opt`.** RHEL 10 bootc base images keep both
+  as read-only image content (older images linked them into `/var`). Writable: `/etc`, `/var`,
+  `/home` (`/var/home`), `/root` (`/var/roothome`). The `aws-fips-bastion` target restores the old
+  links (`/usr/local` -> `/var/usrlocal`, `/opt` -> `/var/opt`). For your own targets, see
+  KB 7137990.
+- **No package repos until registered.** Custom AMIs are bring-your-own-subscription (no RHUI).
+  Register at runtime with `sudo rhc connect --activation-key=<key> --organization=<org_id>`
+  (or `sudo subscription-manager register`); `rhc` and `subscription-manager` are in the image.
+  Then:
+  - Permanent packages: add them to the target Containerfile and rebuild (the image-mode way).
+  - Temporary packages: `sudo bootc usr-overlay`, then `sudo dnf install ...` (gone after reboot).
+- **Root disk grows automatically.** `bootc-generic-growpart.service` (in the base image) expands
+  the root partition and filesystem at first boot, so the 10 GiB AMI disk fills any larger EBS volume.
 
 ### Adding a target
 
@@ -67,3 +86,5 @@ For Azure, the upload steps live in a separate repo.
 2. Install RHEL packages with the shared helper (see the comment in `targets/generic/Containerfile`).
 3. End with `RUN bootc container lint`.
 4. Optionally add `targets/<name>/target.conf` with `DEFAULT_TYPES="..."`.
+5. To build on another target, start `FROM localhost/rhel10-<parent>:latest` and set
+   `PARENT_TARGET="<parent>"` in `target.conf`. `build-image.sh` builds the parent first.
