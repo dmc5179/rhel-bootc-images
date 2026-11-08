@@ -27,7 +27,7 @@ Artifacts land in `output/<target>/`, for example `output/azure/vpc/disk.vhd`.
 ## Layout
 
 ```
-build-image.sh              Main entry point (--target, --type, --pull-secret, --config)
+build-image.sh              Main entry point (--target, --type, --pull-secret, --config, --no-package)
 rhsm-credentials.sh         Prompt for and cache RHSM credentials (--status, --clear)
 lib/rhsm-dnf-install.sh     Shared in-build package installer (register → dnf → unregister → clean)
 targets/<name>/Containerfile  Image definition for a target
@@ -61,6 +61,27 @@ copy `upload.env.example`). Credentials are never stored in the repo.
 | `vmware` | `targets/vmware/upload.sh` | `govc import.vmdk` → `vm.create` (EFI, pvscsi, vmxnet3) → optional cloud-init user-data via guestinfo | `govc`, vCenter login (password prompted) |
 
 For Azure, the upload steps live in a separate repo.
+
+### Transferring a VHD
+
+A fixed VHD's apparent size is the whole disk (10 GiB by default), but only the real data
+(about 1.8 GB) is allocated. A plain copy moves all 10 GiB, so `build-image.sh` packages every
+VHD by default (skip with `--no-package`):
+
+```
+output/azure/vpc/disk.vhd.tar.zst          # sparse-aware tar + zstd, ~1 GB
+output/azure/vpc/disk.vhd.tar.zst.sha256
+```
+
+Copy both files, then on the receiving side (GNU tar 1.31+ for built-in zstd):
+
+```bash
+sha256sum -c disk.vhd.tar.zst.sha256
+tar -xf disk.vhd.tar.zst                    # restores disk.vhd as a sparse file
+# older tar: zstd -dc disk.vhd.tar.zst | tar -xf -
+```
+
+Keep the extracted VHD sparse when copying it further (`cp --sparse=always`, `rsync --sparse`).
 
 ### Image mode behaviour on a running system
 

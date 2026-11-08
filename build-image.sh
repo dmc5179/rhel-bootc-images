@@ -18,6 +18,7 @@ PULL_SECRET="${PULL_SECRET:-${HOME}/Downloads/pull-secret}"
 TARGET=""
 TYPES=()
 CONFIG_TOML=""
+PACKAGE="true"
 
 list_targets() {
     for dir in "${TARGETS_DIR}"/*/; do
@@ -46,6 +47,9 @@ Options:
   --config [PATH]  Pass a bootc-image-builder config.toml (e.g. to bake in a
                    break-glass user). PATH defaults to ${DEFAULT_CONFIG_TOML}.
                    Without this flag no config is used.
+  --no-package     Don't create the transfer archive for VHDs. By default each .vhd gets a
+                   sparse-aware <name>.vhd.tar.zst plus .sha256: a fixed VHD is mostly
+                   zeros, so the archive is about the size of the real data.
   --list-targets   List available targets.
   -h, --help       Show this help.
 
@@ -99,6 +103,9 @@ while [[ $# -gt 0 ]]; do
             ;;
         --pull-secret=*)
             PULL_SECRET="${1#--pull-secret=}"
+            ;;
+        --no-package)
+            PACKAGE="false"
             ;;
         --list-targets)
             list_targets
@@ -158,6 +165,9 @@ fi
 command -v podman >/dev/null 2>&1 || { echo "[ERROR] podman is required but not installed. Run: sudo dnf install -y podman"; exit 1; }
 command -v qemu-img >/dev/null 2>&1 || { echo "[ERROR] qemu-img is required for verification. Run: sudo dnf install -y qemu-img"; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "[ERROR] jq is required for verification. Run: sudo dnf install -y jq"; exit 1; }
+if [[ "${PACKAGE}" == "true" && " ${TYPES[*]} " == *" vhd "* ]]; then
+    command -v zstd >/dev/null 2>&1 || { echo "[ERROR] zstd is required to package VHDs (or pass --no-package). Run: sudo dnf install -y zstd"; exit 1; }
+fi
 
 if [[ -n "${CONFIG_TOML}" ]] && grep -q 'REPLACE_WITH_YOUR_PUBLIC_KEY' "${CONFIG_TOML}"; then
     echo "[ERROR] ${CONFIG_TOML} still contains the placeholder SSH key. Edit it before building."
@@ -253,7 +263,7 @@ sudo chown -R "$(id -u):$(id -g)" "${OUTPUT_DIR}"
 
 # 5. Inspect the generated artifacts
 echo "[4/5] Generated artifacts in ${OUTPUT_DIR}:"
-mapfile -t ARTIFACTS < <(find "${OUTPUT_DIR}" -type f ! -name 'manifest-*.json' | sort)
+mapfile -t ARTIFACTS < <(find "${OUTPUT_DIR}" -type f ! -name 'manifest-*.json' ! -name '*.tar.zst' ! -name '*.sha256' | sort)
 if (( ${#ARTIFACTS[@]} == 0 )); then
     echo "[ERROR] Build completed, but no artifacts were found in ${OUTPUT_DIR}."
     exit 1
@@ -297,8 +307,28 @@ for artifact in "${ARTIFACTS[@]}"; do
     esac
 done
 
+# 6. Package VHDs for transfer. A fixed VHD's apparent size is the whole disk (e.g. 10 GiB) but only
+#    the real data is allocated; sparse-aware tar + zstd keeps the archive near the data size, and
+#    GNU tar restores the VHD as a sparse file on extraction.
+PACKAGES=()
+if [[ "${PACKAGE}" == "true" ]]; then
+    for artifact in "${ARTIFACTS[@]}"; do
+        [[ "${artifact}" == *.vhd ]] || continue
+        archive="${artifact}.tar.zst"
+        echo "[5/5] Packaging $(basename "${artifact}") for transfer..."
+        tar --sparse -I 'zstd -T0' -cf "${archive}" -C "$(dirname "${artifact}")" "$(basename "${artifact}")"
+        ( cd "$(dirname "${archive}")" && sha256sum "$(basename "${archive}")" > "$(basename "${archive}").sha256" )
+        echo "      ${archive} ($(du -h "${archive}" | cut -f1)) + .sha256"
+        PACKAGES+=("${archive}")
+    done
+fi
+
 echo "=========================================================="
 echo "Build complete! Target: ${TARGET}"
 echo "Artifacts: ${OUTPUT_DIR}"
+for archive in "${PACKAGES[@]}"; do
+    echo "Transfer:  ${archive#"${SCRIPT_DIR}/"} (+ .sha256)"
+    echo "           unpack with: sha256sum -c $(basename "${archive}").sha256 && tar -xf $(basename "${archive}")"
+done
 [[ -x "${TARGET_DIR}/upload.sh" ]] && echo "Upload:    ${TARGET_DIR#"${SCRIPT_DIR}/"}/upload.sh (see --help)"
 echo "=========================================================="

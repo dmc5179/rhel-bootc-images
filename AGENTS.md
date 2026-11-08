@@ -16,7 +16,7 @@ The working directory is still named `composer-cli`; the user will rename it to
 
 | File | Purpose |
 |---|---|
-| `build-image.sh` | Main entry point. `--target NAME` (required) builds `targets/NAME/Containerfile` into `localhost/rhel10-NAME:latest` (context = repo root), then runs bootc-image-builder for each `--type` (default from `target.conf`). Pulls use the pull secret via `--authfile`. Output goes to `output/NAME/`; VHDs get Azure format/alignment checks. `--list-targets`, `-h`. |
+| `build-image.sh` | Main entry point. `--target NAME` (required) builds `targets/NAME/Containerfile` into `localhost/rhel10-NAME:latest` (context = repo root), then runs bootc-image-builder for each `--type` (default from `target.conf`). Pulls use the pull secret via `--authfile`. Output goes to `output/NAME/`; VHDs get Azure format/alignment checks and, unless `--no-package`, a sparse-aware `<file>.vhd.tar.zst` + `.sha256` for transfer. `--list-targets`, `-h`. |
 | `targets/<name>/Containerfile` | Image definition per target. `azure`: cloud-init (Azure datasource), hyperv-daemons, Azure kargs. `generic`: plain `rhel-bootc`. |
 | `targets/<name>/target.conf` | `DEFAULT_TYPES="..."` for the target; optional `PARENT_TARGET="..."` to layer on another target (built first; child Containerfile starts `FROM localhost/rhel10-<parent>:latest`). |
 | `targets/{aws,vmware}/upload.sh` | Upload scripts. AWS (shared by all `aws*` targets via symlink; the target comes from the invoking directory): S3 → `import-snapshot` → `register-image` → optional `copy-image` to `COPY_TO_REGIONS`. VMware: `govc import.vmdk` → `vm.create` → optional cloud-init guestinfo. Settings come from gitignored `upload.env` (template `upload.env.example`); the vCenter password is prompted for. |
@@ -61,6 +61,9 @@ The working directory is still named `composer-cli`; the user will rename it to
   `/usr/lib/tmpfiles.d` entries in the target Containerfile.
 - **Parse `qemu-img info` JSON with `jq` using top-level keys only.** qemu 8+ adds nested
   `children` entries with their own `format`/`virtual-size`, which breaks grep-based parsing.
+- **Transfer VHDs sparse.** Package with `tar --sparse -I 'zstd -T0'` (done by default in
+  `build-image.sh`); a 10 GiB fixed VHD with ~1.9 GB of data packs to ~945 MB in seconds and
+  extracts back sparse and byte-identical. The artifact scan ignores `*.tar.zst` and `*.sha256`.
 - **Don't resize VHDs in place.** qemu's `vpc` driver doesn't support resize. Convert to raw,
   resize, and convert back with `-O vpc -o subformat=fixed,force_size`.
 - **Never bake credentials into the image.** RHSM credentials are passed with
@@ -84,12 +87,10 @@ Keep this list current: check items off when done, add new ones as they come up.
 - [ ] Decide whether to keep `config.toml` (break-glass user) or delete it
 - [ ] Decide whether to add `WALinuxAgent` to `targets/azure/Containerfile` (needed for Azure VM extensions)
 - [ ] Boot-test the Azure VHD locally (e.g. libvirt/qemu) before transfer
-- [ ] Document sparse-preserving transfer (e.g. `tar -Sczf` / zstd), since the fixed VHD is 10 GiB but only ~1.8 GB allocated
 - [ ] Verify the existing Azure image has cloud-init enabled; rebuild `--target azure` with the explicit `cloud-init.target` enable
 - [ ] First real build of `--target aws` and `--target vmware` (check lint is clean)
 - [ ] Test `targets/vmware/upload.sh` once vCenter access is available; confirm EFI + pvscsi boot (fall back to `VM_FIRMWARE=bios`/`VM_DISK_CONTROLLER=lsilogic` if not), and check the `rhel10_64Guest` guest ID availability
-- [ ] Consider a `gce` target
-- [ ] User is launching an instance from the first `aws-fips` AMI to verify `/proc/sys/crypto/fips_enabled` = 1, `update-crypto-policies --show` = FIPS, UEFI boot, and SSH as `cloud-user`
+- [ ] GCP: deploy RHEL 10 with FIPS enabled. Add a `gcp-fips` target (bootc-image-builder type `gce`, which produces an `image.tar.gz`) with the same FIPS steps as `aws-fips`, plus a `targets/gcp-fips/upload.sh` (upload to a GCS bucket, then `gcloud compute images create`). Still to work out from Red Hat and Google docs: guest environment (cloud-init GCE datasource vs Google guest agent), kernel args, and UEFI/gVNIC guest OS features. Needs GCP project access
 
 ### Done
 
@@ -107,3 +108,5 @@ Keep this list current: check items off when done, add new ones as they come up.
 - [x] Built `--target aws-fips` and registered the AMI in us-east-1 (2026-11-03); `fips=1` confirmed in the disk image's BLS entry. Created IAM role `vmimport` (S3 access limited to the upload bucket); `targets/aws/upload.sh` worked end to end
 - [x] Built `--target aws-fips-bastion` (2026-11-04) in response to the openshift5-disconnected review, registered it directly in us-east-2 via a dedicated import bucket, and sent them the AMI details
 - [x] openshift5-disconnected verified the `aws-fips-bastion` AMI on m6i.2xlarge (2026-11-04): fips_enabled=1, FIPS policy, `/usr/local` and `/opt` writable via `/var` links, sudo secure_path, all tools present, IMDSv2 enforced, SELinux enforcing, root grew to the volume size. Now their default RHEL 10 test-host AMI
+- [x] FIPS on the `aws-fips` image considered verified (2026-11-04): the bastion AMI layers on it and was confirmed on a running instance (fips_enabled=1, FIPS policy, UEFI boot, `cloud-user` login)
+- [x] Sparse VHD transfer is now the default (2026-11-04): `build-image.sh` writes `<file>.vhd.tar.zst` + `.sha256` (`--no-package` to skip); documented in README "Transferring a VHD"
