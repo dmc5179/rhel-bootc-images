@@ -103,7 +103,6 @@ The working directory is still named `composer-cli`; the user will rename it to
 
 Keep this list current: check items off when done, add new ones as they come up.
 
-- [ ] First real build of `--target generic`
 - [ ] Decide whether to keep `config.toml` (break-glass user) or delete it
 - [ ] Decide whether to add `WALinuxAgent` to `targets/azure/Containerfile` (needed for Azure VM extensions)
 - [ ] Boot-test the Azure VHD locally (e.g. libvirt/qemu) before transfer
@@ -111,6 +110,7 @@ Keep this list current: check items off when done, add new ones as they come up.
 - [ ] First real build of `--target aws` and `--target vmware` (check lint is clean)
 - [ ] Test `targets/vmware/upload.sh` once vCenter access is available; confirm EFI + pvscsi boot (fall back to `VM_FIRMWARE=bios`/`VM_DISK_CONTROLLER=lsilogic` if not), and check the `rhel10_64Guest` guest ID availability
 - [ ] First real (root) run of `update-image.sh` (verified rootless only)
+- [ ] Prototype a Tekton (OpenShift Pipelines) pipeline that runs our build: Containerfile build → rechunk → push to Quay → bootc-image-builder. Use a privileged SCC scoped to the pipeline service account and RHEL entitlements from the cluster (`etc-pki-entitlement` in `openshift-config-managed`); consider CycloneDX SBOMs for Trusted Profile Analyzer. Start from the community examples in Red Hat article 7134398 (not supported by Red Hat). See `docs/rhem-image-builder-evaluation.md`
 
 ### Done
 
@@ -137,3 +137,5 @@ Keep this list current: check items off when done, add new ones as they come up.
 - [x] cloud-init resize disabled in azure, aws, aws-fips, gcp, vmware (2026-11-08); merged config verified in a rootless gcp build (growpart off, resize_rootfs false), lint clean
 - [x] GCP FIPS image used as a keyless OpenShift install host (2026-11-09, by the ocp-in-gcp-il5 session): openshift-install-fips 4.22.18, oc and ccoctl from ~/bin on the RHEL 10.2 FIPS host, credentials only from the metadata server (attached service account, no key file, no gcloud); resulting cluster FIPS on all nodes, all operators healthy
 - [x] GCP test resources cleaned up (2026-11-09): image, bucket and IAP firewall rule deleted after the image was used for OpenShift tests R4/R9 (both passed); nothing left in the sandbox
+- [x] Evaluated RHEM Image Builder on OpenShift (2026-11-09; `docs/rhem-image-builder-evaluation.md`): not a fit. No Containerfile input, no AMI/VHD/GCE output, always adds the RHEM agent; its value is fleet management of agent-enrolled hosts. A Tekton pipeline running our scripts is the better OpenShift path (reuse RHEM's privileged-SCC and entitlement-secret patterns)
+- [x] First real build of `--target generic` (2026-11-09): flattened, qcow2 10 GiB virtual / ~1.06 GB on disk, `qemu-img check` clean; no RHSM prompt after fixing RHSM detection to ignore commented lines

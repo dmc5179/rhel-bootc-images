@@ -211,7 +211,7 @@ echo "Target: ${TARGET}    Types: ${TYPES[*]}    Image: ${LOCAL_IMAGE}"
 HOST_ID=$(. /etc/os-release && echo "${ID}")
 CHAIN_CONTAINERFILES=()
 for t in "${BUILD_CHAIN[@]}"; do CHAIN_CONTAINERFILES+=("${TARGETS_DIR}/${t}/Containerfile"); done
-if [[ "${SKIP_BUILD}" != "true" ]] && grep -q 'rhsm-dnf-install' "${CHAIN_CONTAINERFILES[@]}" && [[ "${HOST_ID}" != "rhel" ]] \
+if [[ "${SKIP_BUILD}" != "true" ]] && grep -qE '^[^#]*rhsm-dnf-install' "${CHAIN_CONTAINERFILES[@]}" && [[ "${HOST_ID}" != "rhel" ]] \
    && [[ ! -s "${RHSM_SECRETS_DIR}/rhsm_user" || ! -s "${RHSM_SECRETS_DIR}/rhsm_pass" ]]; then
     echo "[0/5] Non-RHEL host (${HOST_ID}): Red Hat credentials are needed to install RHEL packages in the build."
     "${RHSM_HELPER}"
