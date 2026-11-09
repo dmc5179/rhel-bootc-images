@@ -33,4 +33,8 @@ RUN printf '%s\n' 'kargs = ["console=tty0", "console=ttyS0,115200n8", "nvme_core
 # Restrict cloud-init to the EC2 datasource to avoid slow probing of others
 RUN printf '%s\n' 'datasource_list: [ Ec2, None ]' > /etc/cloud/cloud.cfg.d/90-aws-datasource.cfg
 
+# Image mode: / is a read-only composefs mount, so cloud-init's growpart/resizefs fail and mark
+# cloud-init "degraded". The base image's bootc-generic-growpart grows the disk instead.
+RUN printf '%s\n' 'growpart:' '  mode: "off"' 'resize_rootfs: false' > /etc/cloud/cloud.cfg.d/91-bootc-no-resize.cfg
+
 RUN bootc container lint

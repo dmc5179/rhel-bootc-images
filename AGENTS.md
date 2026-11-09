@@ -57,6 +57,12 @@ The working directory is still named `composer-cli`; the user will rename it to
 - **Check package names before adding them**: rootless `podman run -v $XDG_RUNTIME_DIR/rhsm-build:/run/secrets:ro,z`
   on `rhel10/rhel-bootc`, register, `dnf repoquery --available`, unregister. (`podman run --secret`
   doesn't take `id=,src=` like `podman build`.)
+- **cloud-init must not resize the disk**: every cloud target ships
+  `/etc/cloud/cloud.cfg.d/91-bootc-no-resize.cfg` (`growpart: mode: "off"`, `resize_rootfs: false`).
+  `/` is read-only composefs, so cloud-init's resize fails and marks it "degraded";
+  `bootc-generic-growpart` grows the disk. Children (`gcp-fips`, `aws-fips-bastion`) inherit it.
+- **FIPS hosts refuse ssh-ed25519 keys**: sshd accepts only ecdsa-sha2-nistp256/384/521 and
+  rsa-sha2-256/512. Use ECDSA or RSA keys for `cloud-user`.
 - **GCP uses cloud-init, not Google's guest agent** (not in the RHEL repos). cloud-init's GCE
   datasource only accepts metadata `ssh-keys` entries for `cloud-user` (or `cloudinit`) and only at
   first boot, so `gcloud compute ssh` key pushes and OS Login don't work. The bootc kernel has
@@ -64,7 +70,7 @@ The working directory is still named `composer-cli`; the user will rename it to
 - **Every target ends with `RUN bootc container lint`.** Keep `/var` and `/run` clean in image layers.
   The only expected lint warning is `var/roothome/buildinfo/content-sets.json` from the base image.
   When verifying an image, run `bootc container lint` before any `subscription-manager` command,
-  which writes `/run/rhsm` and `/var/lib/rhsm` itself. Packages that create `/var` dirs need
+  which writes `/run/rhsm` and `/var/lib/rhsm` itself (so do `cloud-init` commands, in `/run/cloud-init`). Packages that create `/var` dirs need
   `/usr/lib/tmpfiles.d` entries in the target Containerfile.
 - **Parse `qemu-img info` JSON with `jq` using top-level keys only.** qemu 8+ adds nested
   `children` entries with their own `format`/`virtual-size`, which breaks grep-based parsing.
@@ -105,7 +111,6 @@ Keep this list current: check items off when done, add new ones as they come up.
 - [ ] First real build of `--target aws` and `--target vmware` (check lint is clean)
 - [ ] Test `targets/vmware/upload.sh` once vCenter access is available; confirm EFI + pvscsi boot (fall back to `VM_FIRMWARE=bios`/`VM_DISK_CONTROLLER=lsilogic` if not), and check the `rhel10_64Guest` guest ID availability
 - [ ] First real (root) run of `update-image.sh` (verified rootless only)
-- [ ] GCP: test RHEL 10 with FIPS in the user's GCP project: `./build-image.sh --target gcp-fips`, then `targets/gcp-fips/upload.sh`; launch with `ssh-keys=cloud-user:<key>` metadata and check fips_enabled=1, FIPS policy, UEFI boot, gVNIC, SSH as `cloud-user`
 
 ### Done
 
@@ -128,3 +133,5 @@ Keep this list current: check items off when done, add new ones as they come up.
 - [x] Added `gcp` and `gcp-fips` (layers on `gcp`) targets and `targets/gcp/upload.sh` (2026-11-08); rootless real build of both layers passed (lint clean, fips=1 + GCE console kargs, FIPS policy, cloud-init GCE datasource); upload flow checked against a stub gcloud
 - [x] Flatten by default (2026-11-08): `build-image.sh` rechunks the final image (`lib/rechunk.sh`), `--skip-build` added; draft `update-image.sh` (upgrade + rechunk + report); shared installer gained `--upgrade` and `/boot` + `/var/lib/rpm-state` cleanup. Verified rootless end to end with a real kernel update
 - [x] Default rechunk verified as root (2026-11-08): `./build-image.sh --target gcp-fips --host-network` flattened and produced the GCE image (fips=1 + GCE console kargs confirmed)
+- [x] GCP FIPS verified on a real VM (2026-11-08): flattened `gcp-fips` image (CMEK, us-east4) launched by the ocp-in-gcp-il5 session as a Shielded VM with Secure Boot (shim boots with GCE default keys), gVNIC (gve), CMEK disk, no external IP, IAP SSH. fips_enabled=1, FIPS policy, fips provider active, root grew to the 50 GB disk, cloud-init GCE datasource OK, metadata SA token OK, 0 failed units, SELinux enforcing
+- [x] cloud-init resize disabled in azure, aws, aws-fips, gcp, vmware (2026-11-08); merged config verified in a rootless gcp build (growpart off, resize_rootfs false), lint clean
