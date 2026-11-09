@@ -133,6 +133,26 @@ tar -xf disk.vhd.tar.zst                    # restores disk.vhd as a sparse file
 
 Keep the extracted VHD sparse when copying it further (`cp --sparse=always`, `rsync --sparse`).
 
+### Boot-testing a disk image locally
+
+Before deploying, boot the disk image in a throwaway VM (`snapshot=on` leaves the file unchanged):
+
+```bash
+# BIOS
+qemu-system-x86_64 -m 2048 -smp 2 -enable-kvm -cpu host \
+  -drive file=output/generic/qcow2/disk.qcow2,if=virtio,snapshot=on
+
+# UEFI (closer to cloud VMs; Azure Gen2 is UEFI-only)
+qemu-system-x86_64 -m 2048 -smp 2 -enable-kvm -cpu host \
+  -drive if=pflash,format=raw,readonly=on,file=/usr/share/edk2/ovmf/OVMF_CODE.fd \
+  -drive file=output/generic/qcow2/disk.qcow2,if=virtio,snapshot=on
+```
+
+For a VHD use `file=output/azure/vpc/disk.vhd,format=vpc,if=virtio,snapshot=on`. Reaching the login
+prompt means the image boots. Images without a login user (generic, or cloud targets that rely on
+cloud-init) can't be logged into locally; keep the graphical window, since only the cloud targets
+send their console to the serial port. Cloud-init may wait a while for a metadata service it can't find locally.
+
 ### Image mode behaviour on a running system
 
 These are by design in RHEL 10 image mode, not build problems:
