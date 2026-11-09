@@ -14,16 +14,24 @@
 #   RUN --mount=type=bind,source=lib/rhsm-dnf-install.sh,target=/tmp/rhsm-dnf-install.sh,z \
 #       --mount=type=secret,id=rhsm_user --mount=type=secret,id=rhsm_pass --mount=type=secret,id=rhsm_org \
 #       sh /tmp/rhsm-dnf-install.sh <package>...
+#   or, to update everything (optionally installing more packages in the same registration):
+#       sh /tmp/rhsm-dnf-install.sh --upgrade [<package>...]
 # ------------------------------------------------------------------------------
 set -eu
 
-[ "$#" -gt 0 ] || { echo "usage: rhsm-dnf-install.sh <package>..." >&2; exit 1; }
+UPGRADE=0
+if [ "${1:-}" = "--upgrade" ]; then
+    UPGRADE=1
+    shift
+fi
+[ "${UPGRADE}" -eq 1 ] || [ "$#" -gt 0 ] || { echo "usage: rhsm-dnf-install.sh [--upgrade] <package>..." >&2; exit 1; }
 
 REGISTERED=0
 RUN_BEFORE=" $(ls -A /run | tr '\n' ' ') "
 # State/log/cache trees where anything created during this step is build residue
-# (RHSM facts/productid/logs, ldconfig cache, root dotfiles, ...). Pre-existing entries are kept.
-VAR_STATE_DIRS="/var/cache /var/log /var/lib/rhsm /var/roothome"
+# (RHSM facts/productid/logs, ldconfig cache, root dotfiles, kernel-update leftovers such as
+# /boot/symvers-*.xz, ...). Pre-existing entries are kept.
+VAR_STATE_DIRS="/var/cache /var/log /var/lib/rhsm /var/lib/rpm-state /var/roothome /boot"
 NL='
 '
 VAR_BEFORE="${NL}$(find ${VAR_STATE_DIRS} 2>/dev/null || true)${NL}"
@@ -64,5 +72,10 @@ if [ -s /run/secrets/rhsm_user ] && [ -s /run/secrets/rhsm_pass ]; then
     fi
 fi
 
-dnf -y install "$@"
+if [ "${UPGRADE}" -eq 1 ]; then
+    dnf -y upgrade
+fi
+if [ "$#" -gt 0 ]; then
+    dnf -y install "$@"
+fi
 dnf clean all

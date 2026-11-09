@@ -19,7 +19,10 @@ The working directory is still named `composer-cli`; the user will rename it to
 | `build-image.sh` | Main entry point. `--target NAME` (required) builds `targets/NAME/Containerfile` into `localhost/rhel10-NAME:latest` (context = repo root), then runs bootc-image-builder for each `--type` (default from `target.conf`). Pulls use the pull secret via `--authfile`. Output goes to `output/NAME/`; VHDs get Azure format/alignment checks and, unless `--no-package`, a sparse-aware `<file>.vhd.tar.zst` + `.sha256` for transfer. `--list-targets`, `-h`. |
 | `targets/<name>/Containerfile` | Image definition per target. `azure`: cloud-init (Azure datasource), hyperv-daemons, Azure kargs. `generic`: plain `rhel-bootc`. |
 | `targets/<name>/target.conf` | `DEFAULT_TYPES="..."` for the target; optional `PARENT_TARGET="..."` to layer on another target (built first; child Containerfile starts `FROM localhost/rhel10-<parent>:latest`). |
+| `targets/gcp/upload.sh` | GCP upload (shared by `gcp` and `gcp-fips` via symlink): GCS upload → `gcloud compute images create` with guest OS features `UEFI_COMPATIBLE,GVNIC,VIRTIO_SCSI_MULTIQUEUE`. Auth via gcloud login or `GCP_CREDENTIALS_FILE` (service account key under `secrets/`, applied with `CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE` for the run only). Settings in gitignored `upload.env`. |
 | `targets/{aws,vmware}/upload.sh` | Upload scripts. AWS (shared by all `aws*` targets via symlink; the target comes from the invoking directory): S3 → `import-snapshot` → `register-image` → optional `copy-image` to `COPY_TO_REGIONS`. VMware: `govc import.vmdk` → `vm.create` → optional cloud-init guestinfo. Settings come from gitignored `upload.env` (template `upload.env.example`); the vCenter password is prompted for. |
+| `update-image.sh` | Draft update flow: `dnf upgrade` (+ `--install`) on an existing image (`--from`, default `localhost/rhel10-<t>:latest`) via the shared installer, rechunk into `:latest` + `:<timestamp>`, keep `:pre-update-<timestamp>`, RPM change report in `output/<t>/update-<timestamp>.txt`, optional `--disk` (calls `build-image.sh --skip-build`). |
+| `lib/rechunk.sh` | `rechunk_image` (root `bootc-base-imagectl rechunk` with `/var/lib/containers` mounted, per RHEL 10 image mode guide 9.5) and `image_summary`. Sourced by both scripts. |
 | `lib/rhsm-dnf-install.sh` | Shared in-build package installer, bind-mounted into `RUN` steps. With secrets: register → dnf → unregister/clean (EXIT trap). Without: plain dnf. Always cleans dnf/RHSM state from `/var` and new `/run` entries for `bootc container lint`. |
 | `rhsm-credentials.sh` | Prompts for Red Hat username/password, verifies them and looks up the org via the RHSM API (needs `/etc/rhsm/ca/redhat-uep.pem`; otherwise cached unverified), and caches them in `$XDG_RUNTIME_DIR/rhsm-build/` (tmpfs). `--status`, `--clear`. `build-image.sh` calls it automatically on non-RHEL hosts when the target uses the helper. |
 | `config.toml` | Optional bootc-image-builder config with a break-glass user. Used **only** with `--config`. Holds a placeholder SSH key, which the script refuses to build with. |
@@ -54,6 +57,10 @@ The working directory is still named `composer-cli`; the user will rename it to
 - **Check package names before adding them**: rootless `podman run -v $XDG_RUNTIME_DIR/rhsm-build:/run/secrets:ro,z`
   on `rhel10/rhel-bootc`, register, `dnf repoquery --available`, unregister. (`podman run --secret`
   doesn't take `id=,src=` like `podman build`.)
+- **GCP uses cloud-init, not Google's guest agent** (not in the RHEL repos). cloud-init's GCE
+  datasource only accepts metadata `ssh-keys` entries for `cloud-user` (or `cloudinit`) and only at
+  first boot, so `gcloud compute ssh` key pushes and OS Login don't work. The bootc kernel has
+  `gve` (gVNIC), `nvme` and `virtio_scsi`.
 - **Every target ends with `RUN bootc container lint`.** Keep `/var` and `/run` clean in image layers.
   The only expected lint warning is `var/roothome/buildinfo/content-sets.json` from the base image.
   When verifying an image, run `bootc container lint` before any `subscription-manager` command,
@@ -61,6 +68,13 @@ The working directory is still named `composer-cli`; the user will rename it to
   `/usr/lib/tmpfiles.d` entries in the target Containerfile.
 - **Parse `qemu-img info` JSON with `jq` using top-level keys only.** qemu 8+ adds nested
   `children` entries with their own `format`/`virtual-size`, which breaks grep-based parsing.
+- **Images are flattened by default.** `build-image.sh` builds the final target as `:unchunked`
+  and rechunks it into `:latest` (`--no-rechunk` to skip). Verified: a file added in one layer and
+  deleted in the next was in 2 layers before rechunk and 0 after; a real kernel update shrank the
+  image from 1.86 GB to 1.66 GB. Rootless rechunk testing needs the user's storage mounted at its
+  own path (under `/var/home/...` inside the container) plus a matching `storage.conf`.
+- **Kernel updates in images** leave `/boot/symvers-*.xz` and `/var/lib/rpm-state/kernel`; the
+  shared installer's cleanup covers `/boot` and `/var/lib/rpm-state`. dnf keeps a single kernel.
 - **Transfer VHDs sparse.** Package with `tar --sparse -I 'zstd -T0'` (done by default in
   `build-image.sh`); a 10 GiB fixed VHD with ~1.9 GB of data packs to ~945 MB in seconds and
   extracts back sparse and byte-identical. The artifact scan ignores `*.tar.zst` and `*.sha256`.
@@ -90,7 +104,8 @@ Keep this list current: check items off when done, add new ones as they come up.
 - [ ] Verify the existing Azure image has cloud-init enabled; rebuild `--target azure` with the explicit `cloud-init.target` enable
 - [ ] First real build of `--target aws` and `--target vmware` (check lint is clean)
 - [ ] Test `targets/vmware/upload.sh` once vCenter access is available; confirm EFI + pvscsi boot (fall back to `VM_FIRMWARE=bios`/`VM_DISK_CONTROLLER=lsilogic` if not), and check the `rhel10_64Guest` guest ID availability
-- [ ] GCP: deploy RHEL 10 with FIPS enabled. Add a `gcp-fips` target (bootc-image-builder type `gce`, which produces an `image.tar.gz`) with the same FIPS steps as `aws-fips`, plus a `targets/gcp-fips/upload.sh` (upload to a GCS bucket, then `gcloud compute images create`). Still to work out from Red Hat and Google docs: guest environment (cloud-init GCE datasource vs Google guest agent), kernel args, and UEFI/gVNIC guest OS features. Needs GCP project access
+- [ ] First real (root) run of `update-image.sh` (verified rootless only)
+- [ ] GCP: test RHEL 10 with FIPS in the user's GCP project: `./build-image.sh --target gcp-fips`, then `targets/gcp-fips/upload.sh`; launch with `ssh-keys=cloud-user:<key>` metadata and check fips_enabled=1, FIPS policy, UEFI boot, gVNIC, SSH as `cloud-user`
 
 ### Done
 
@@ -110,3 +125,6 @@ Keep this list current: check items off when done, add new ones as they come up.
 - [x] openshift5-disconnected verified the `aws-fips-bastion` AMI on m6i.2xlarge (2026-11-04): fips_enabled=1, FIPS policy, `/usr/local` and `/opt` writable via `/var` links, sudo secure_path, all tools present, IMDSv2 enforced, SELinux enforcing, root grew to the volume size. Now their default RHEL 10 test-host AMI
 - [x] FIPS on the `aws-fips` image considered verified (2026-11-04): the bastion AMI layers on it and was confirmed on a running instance (fips_enabled=1, FIPS policy, UEFI boot, `cloud-user` login)
 - [x] Sparse VHD transfer is now the default (2026-11-04): `build-image.sh` writes `<file>.vhd.tar.zst` + `.sha256` (`--no-package` to skip); documented in README "Transferring a VHD"
+- [x] Added `gcp` and `gcp-fips` (layers on `gcp`) targets and `targets/gcp/upload.sh` (2026-11-08); rootless real build of both layers passed (lint clean, fips=1 + GCE console kargs, FIPS policy, cloud-init GCE datasource); upload flow checked against a stub gcloud
+- [x] Flatten by default (2026-11-08): `build-image.sh` rechunks the final image (`lib/rechunk.sh`), `--skip-build` added; draft `update-image.sh` (upgrade + rechunk + report); shared installer gained `--upgrade` and `/boot` + `/var/lib/rpm-state` cleanup. Verified rootless end to end with a real kernel update
+- [x] Default rechunk verified as root (2026-11-08): `./build-image.sh --target gcp-fips --host-network` flattened and produced the GCE image (fips=1 + GCE console kargs confirmed)

@@ -19,6 +19,10 @@ TARGET=""
 TYPES=()
 CONFIG_TOML=""
 PACKAGE="true"
+BUILD_NET_ARGS=()
+RECHUNK="true"
+MAX_LAYERS=""
+SKIP_BUILD="false"
 
 list_targets() {
     for dir in "${TARGETS_DIR}"/*/; do
@@ -50,6 +54,16 @@ Options:
   --no-package     Don't create the transfer archive for VHDs. By default each .vhd gets a
                    sparse-aware <name>.vhd.tar.zst plus .sha256: a fixed VHD is mostly
                    zeros, so the archive is about the size of the real data.
+  --host-network   Run the image build (podman build) in the host's network namespace. Use it
+                   when root containers can't resolve names but the host can, e.g. while
+                   sshuttle --dns or a VPN intercepts DNS.
+  --no-rechunk     Don't flatten the final image. By default it's rechunked with
+                   bootc-base-imagectl rechunk: layers are regenerated from the final
+                   filesystem, so files removed or replaced by later build steps (old RPM
+                   versions) aren't left in lower layers for scanners to flag.
+  --max-layers N   Number of layers rechunk produces (default: the tool's default).
+  --skip-build     Don't build; make disk images from the existing local
+                   localhost/rhel10-NAME:latest (e.g. after update-image.sh).
   --list-targets   List available targets.
   -h, --help       Show this help.
 
@@ -106,6 +120,20 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-package)
             PACKAGE="false"
+            ;;
+        --host-network)
+            BUILD_NET_ARGS=(--network host)
+            ;;
+        --no-rechunk)
+            RECHUNK="false"
+            ;;
+        --max-layers)
+            [[ $# -gt 1 && "$2" =~ ^[0-9]+$ ]] || { echo "[ERROR] --max-layers requires a number"; exit 1; }
+            MAX_LAYERS="$2"
+            shift
+            ;;
+        --skip-build)
+            SKIP_BUILD="true"
             ;;
         --list-targets)
             list_targets
@@ -183,7 +211,7 @@ echo "Target: ${TARGET}    Types: ${TYPES[*]}    Image: ${LOCAL_IMAGE}"
 HOST_ID=$(. /etc/os-release && echo "${ID}")
 CHAIN_CONTAINERFILES=()
 for t in "${BUILD_CHAIN[@]}"; do CHAIN_CONTAINERFILES+=("${TARGETS_DIR}/${t}/Containerfile"); done
-if grep -q 'rhsm-dnf-install' "${CHAIN_CONTAINERFILES[@]}" && [[ "${HOST_ID}" != "rhel" ]] \
+if [[ "${SKIP_BUILD}" != "true" ]] && grep -q 'rhsm-dnf-install' "${CHAIN_CONTAINERFILES[@]}" && [[ "${HOST_ID}" != "rhel" ]] \
    && [[ ! -s "${RHSM_SECRETS_DIR}/rhsm_user" || ! -s "${RHSM_SECRETS_DIR}/rhsm_pass" ]]; then
     echo "[0/5] Non-RHEL host (${HOST_ID}): Red Hat credentials are needed to install RHEL packages in the build."
     "${RHSM_HELPER}"
@@ -210,22 +238,42 @@ else
     exit 1
 fi
 
-# 3. Build the target image (and any parents) in root's container storage (context = repo root, for lib/)
-SECRET_ARGS=()
-for secret in rhsm_user rhsm_pass rhsm_org; do
-    if [[ -s "${RHSM_SECRETS_DIR}/${secret}" ]]; then
-        SECRET_ARGS+=(--secret "id=${secret},src=${RHSM_SECRETS_DIR}/${secret}")
+# shellcheck source=lib/rechunk.sh
+. "${SCRIPT_DIR}/lib/rechunk.sh"
+
+if [[ "${SKIP_BUILD}" == "true" ]]; then
+    sudo podman image exists "${LOCAL_IMAGE}" \
+        || { echo "[ERROR] --skip-build: ${LOCAL_IMAGE} not found in root container storage."; exit 1; }
+    echo "[2/5] Skipping build; using existing ${LOCAL_IMAGE} ($(image_summary "${LOCAL_IMAGE}"))"
+else
+    # 3. Build the target image (and any parents) in root's container storage (context = repo root, for lib/)
+    SECRET_ARGS=()
+    for secret in rhsm_user rhsm_pass rhsm_org; do
+        if [[ -s "${RHSM_SECRETS_DIR}/${secret}" ]]; then
+            SECRET_ARGS+=(--secret "id=${secret},src=${RHSM_SECRETS_DIR}/${secret}")
+        fi
+    done
+    for t in "${BUILD_CHAIN[@]}"; do
+        # The final image is built under :unchunked and flattened into :latest below. The :unchunked
+        # tag is kept so its layers serve as the build cache next time.
+        tag="latest"
+        [[ "${t}" == "${TARGET}" && "${RECHUNK}" == "true" ]] && tag="unchunked"
+        echo "[2/5] Building localhost/rhel10-${t}:${tag} from targets/${t}/Containerfile..."
+        (( ${#SECRET_ARGS[@]} > 0 )) && echo "  - Passing cached RHSM credentials as build secrets"
+        # Children start FROM a parent image that was just built locally, so don't try to pull it
+        PULL_POLICY="newer"
+        [[ "${t}" == "${BUILD_CHAIN[0]}" ]] || PULL_POLICY="never"
+        sudo podman build --pull="${PULL_POLICY}" "${BUILD_NET_ARGS[@]}" "${AUTH_ARGS[@]}" "${SECRET_ARGS[@]}" \
+            -t "localhost/rhel10-${t}:${tag}" -f "${TARGETS_DIR}/${t}/Containerfile" "${SCRIPT_DIR}"
+    done
+
+    # 3b. Flatten the final image
+    if [[ "${RECHUNK}" == "true" ]]; then
+        echo "[2/5] Flattening localhost/rhel10-${TARGET}:unchunked ($(image_summary "localhost/rhel10-${TARGET}:unchunked")) with bootc-base-imagectl rechunk..."
+        rechunk_image "localhost/rhel10-${TARGET}:unchunked" "${LOCAL_IMAGE}" "${MAX_LAYERS}"
+        echo "  - ${LOCAL_IMAGE}: $(image_summary "${LOCAL_IMAGE}")"
     fi
-done
-for t in "${BUILD_CHAIN[@]}"; do
-    echo "[2/5] Building localhost/rhel10-${t}:latest from targets/${t}/Containerfile..."
-    (( ${#SECRET_ARGS[@]} > 0 )) && echo "  - Passing cached RHSM credentials as build secrets"
-    # Children start FROM a parent image that was just built locally, so don't try to pull it
-    PULL_POLICY="newer"
-    [[ "${t}" == "${BUILD_CHAIN[0]}" ]] || PULL_POLICY="never"
-    sudo podman build --pull="${PULL_POLICY}" "${AUTH_ARGS[@]}" "${SECRET_ARGS[@]}" \
-        -t "localhost/rhel10-${t}:latest" -f "${TARGETS_DIR}/${t}/Containerfile" "${SCRIPT_DIR}"
-done
+fi
 
 mkdir -p "${OUTPUT_DIR}"
 

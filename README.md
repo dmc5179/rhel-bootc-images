@@ -27,9 +27,12 @@ Artifacts land in `output/<target>/`, for example `output/azure/vpc/disk.vhd`.
 ## Layout
 
 ```
-build-image.sh              Main entry point (--target, --type, --pull-secret, --config, --no-package)
+build-image.sh              Main entry point (--target, --type, --pull-secret, --config, --no-package,
+                            --no-rechunk, --max-layers, --skip-build, --host-network)
+update-image.sh             Update an existing image (dnf upgrade, --install), flatten it, report changes
 rhsm-credentials.sh         Prompt for and cache RHSM credentials (--status, --clear)
-lib/rhsm-dnf-install.sh     Shared in-build package installer (register → dnf → unregister → clean)
+lib/rhsm-dnf-install.sh     Shared in-build package installer (register → dnf install/upgrade → unregister → clean)
+lib/rechunk.sh              Shared flattening step (bootc-base-imagectl rechunk)
 targets/<name>/Containerfile  Image definition for a target
 targets/<name>/target.conf    DEFAULT_TYPES for the target
 targets/<name>/upload.sh      Optional upload/import script (aws, vmware)
@@ -44,6 +47,8 @@ config.toml                 Optional bootc-image-builder config (break-glass use
 | `aws` | `ami` | cloud-init (EC2 datasource), EC2 serial console and NVMe timeout kernel args |
 | `aws-fips` | `ami` | Same as `aws`, plus FIPS mode: `fips=1` kernel arg and the `FIPS` crypto policy |
 | `aws-fips-bastion` | `ami` | Layers on `aws-fips` (`PARENT_TARGET`): writable `/usr/local` and `/opt`, sudo `secure_path` with `/usr/local/bin`, and bastion tools (`wget`, `unzip`, `nmstate`, `xorriso`, `tmux`, `vim-enhanced`, `git`, `python3-pip`, `awscli2`, `bash-completion`) |
+| `gcp` | `gce` | cloud-init (GCE datasource), GCE serial console kernel args |
+| `gcp-fips` | `gce` | Layers on `gcp` (`PARENT_TARGET`): FIPS mode (`fips=1` kernel arg and the `FIPS` crypto policy) |
 | `vmware` | `vmdk` | cloud-init (VMware guestinfo datasource), open-vm-tools |
 | `generic` | `qcow2` | Nothing; plain `rhel-bootc` |
 
@@ -58,9 +63,54 @@ copy `upload.env.example`). Credentials are never stored in the repo.
 | Target | Script | Does | Needs |
 |---|---|---|---|
 | `aws`, `aws-fips`, `aws-fips-bastion` | `targets/aws/upload.sh` (the others link to it); `COPY_TO_REGIONS` copies the AMI to more regions | S3 upload → `import-snapshot` → `register-image` (UEFI-preferred, ENA, IMDSv2) | AWS CLI profile, S3 bucket, `vmimport` IAM role |
+| `gcp`, `gcp-fips` | `targets/gcp/upload.sh` (`gcp-fips/upload.sh` links to it) | GCS upload → `gcloud compute images create` (guest OS features `UEFI_COMPATIBLE,GVNIC,VIRTIO_SCSI_MULTIQUEUE`, optional family) | `gcloud` login or a service account key (`GCP_CREDENTIALS_FILE`), GCS bucket |
 | `vmware` | `targets/vmware/upload.sh` | `govc import.vmdk` → `vm.create` (EFI, pvscsi, vmxnet3) → optional cloud-init user-data via guestinfo | `govc`, vCenter login (password prompted) |
 
 For Azure, the upload steps live in a separate repo.
+
+### Flattened images (rechunk)
+
+Every build flattens the final image with `bootc-base-imagectl rechunk` (RHEL 10 image mode guide,
+section 9.5). The layers are regenerated from the final filesystem, so packages or files that one
+build step added and a later step removed or upgraded aren't left in lower layers, where
+layer-by-layer vulnerability scanners would still flag them. It also gives reproducible,
+content-addressed layers, so updates move less data.
+
+- The pre-flattening image is kept as `localhost/rhel10-<target>:unchunked` (it's the build cache).
+- `--no-rechunk` skips it; `--max-layers N` tunes the layer count.
+- Scanners that read the RPM database already see only final packages; some known false positives
+  (e.g. Go modules vendored into binaries) aren't layer-related and remain.
+
+### Updating an existing image
+
+```bash
+./update-image.sh --target aws-fips-bastion            # dnf upgrade + flatten
+./update-image.sh --target azure --install WALinuxAgent --disk   # also install, then make the VHD
+./update-image.sh --target gcp-fips --from <registry>/<image>:<tag>
+```
+
+It runs `dnf upgrade` (plus any `--install` packages) on the existing image in one RHSM
+registration, flattens the result into `localhost/rhel10-<target>:latest` (also tagged
+`:<timestamp>`), keeps the previous image as `:pre-update-<timestamp>`, and writes an RPM change
+report to `output/<target>/update-<timestamp>.txt`. Then either:
+
+- make new disk images: `./build-image.sh --target <target> --skip-build` (or pass `--disk`), or
+- push the image to the registry your hosts track and run `bootc upgrade` on them.
+
+A full rebuild (`./build-image.sh --target <target>`) is the image-mode-native alternative and also
+picks up a newer base image. Note: a host installed from a locally built disk image re-downloads
+all layers on its first `bootc upgrade` (known limitation, bootc#1197 / RHEL-147106).
+
+### SSH keys on GCP
+
+The GCP images use cloud-init (Google's guest agent isn't in the RHEL repos), so GCE's usual
+dynamic key handling doesn't apply:
+
+- Put the key in instance metadata **when you create the VM**, for user `cloud-user`:
+  `--metadata=ssh-keys="cloud-user:$(cat ~/.ssh/id_ed25519.pub)"`. cloud-init ignores keys for
+  other usernames and only reads them at first boot.
+- Keys added later (including by `gcloud compute ssh`) and OS Login aren't applied. If your
+  organization enforces OS Login, the project needs `enable-oslogin=FALSE` for these VMs.
 
 ### Transferring a VHD
 

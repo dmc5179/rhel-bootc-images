@@ -1,0 +1,20 @@
+# Target: gcp-fips — the gcp image with FIPS mode enabled.
+# Layers on the gcp image (PARENT_TARGET in target.conf); build-image.sh builds it first.
+# FIPS steps follow "Enabling FIPS mode in a bootc image build" (RHEL 10 "Using image mode for RHEL",
+# chapter 11). RHEL 10 has no fips-mode-setup and can't switch to FIPS after installation.
+# Build context is the repo root (see build-image.sh).
+FROM localhost/rhel10-gcp:latest
+
+# crypto-policies-scripts provides update-crypto-policies (not installed by default in RHEL 10)
+RUN --mount=type=bind,source=lib/rhsm-dnf-install.sh,target=/tmp/rhsm-dnf-install.sh,z \
+    --mount=type=secret,id=rhsm_user --mount=type=secret,id=rhsm_pass --mount=type=secret,id=rhsm_org \
+    sh /tmp/rhsm-dnf-install.sh crypto-policies-scripts
+
+# FIPS: fips=1 kernel argument, applied at install/first boot from kargs.d
+RUN mkdir -p /usr/lib/bootc/kargs.d && \
+    printf '%s\n' '# Enable FIPS' 'kargs = ["fips=1"]' > /usr/lib/bootc/kargs.d/01-fips.toml
+
+# FIPS: system-wide cryptographic policy
+RUN update-crypto-policies --no-reload --set FIPS
+
+RUN bootc container lint
