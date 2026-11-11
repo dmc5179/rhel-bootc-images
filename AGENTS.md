@@ -87,6 +87,11 @@ The working directory is still named `composer-cli`; the user will rename it to
   deleted in the next was in 2 layers before rechunk and 0 after; a real kernel update shrank the
   image from 1.86 GB to 1.66 GB. Rootless rechunk testing needs the user's storage mounted at its
   own path (under `/var/home/...` inside the container) plus a matching `storage.conf`.
+- **~50 MB `rpm-ostree-base-db` after any package change is by design.** The base image ships
+  `/usr/lib/sysimage/rpm-ostree-base-db/rpmdb.sqlite`, the base package list rpm-ostree uses, as a
+  hard link to `/usr/share/rpm/rpmdb.sqlite`. Any dnf transaction rewrites the live database, so
+  the two split into separate ~50 MB files and rechunk can't merge them (reproduced: generic update
+  1.58 -> 1.64 GB). Don't delete it.
 - **Kernel updates in images** leave `/boot/symvers-*.xz` and `/var/lib/rpm-state/kernel`; the
   shared installer's cleanup covers `/boot` and `/var/lib/rpm-state`. dnf keeps a single kernel.
 - **Transfer VHDs sparse.** Package with `tar --sparse -I 'zstd -T0'` (done by default in
