@@ -28,6 +28,7 @@ S3_KEY="${S3_KEY:-bootc-imports/${AMI_NAME}.raw}"
 ARCH="${ARCH:-x86_64}"
 KEEP_S3_OBJECT="${KEEP_S3_OBJECT:-false}"
 COPY_TO_REGIONS="${COPY_TO_REGIONS:-}"
+AWS_TAGS="${AWS_TAGS:-}"
 
 usage() {
     cat <<EOF
@@ -42,6 +43,8 @@ Settings (env vars or ${ENV_FILE}):
   ARCH             x86_64 (default) or arm64
   KEEP_S3_OBJECT   true to keep the raw image in S3 after import (default: false)
   COPY_TO_REGIONS  Space-separated regions to copy the AMI to after registering, e.g. "us-east-2"
+  AWS_TAGS         Tags for the snapshot and AMI (and copies), comma-separated Key=Value,
+                   e.g. "Purpose=my-teardown-tag,Owner=me". The AMI is always private.
 
 Prerequisite: the account needs the 'vmimport' service role that VM Import/Export uses
 to read from S3. See the AWS "VM Import/Export required service role" docs.
@@ -61,6 +64,12 @@ command -v jq >/dev/null 2>&1 || { echo "[ERROR] jq is required. Run: sudo dnf i
 [[ -n "${AWS_S3_BUCKET:-}" ]] || { echo "[ERROR] AWS_S3_BUCKET is not set (see ${ENV_FILE})."; exit 1; }
 [[ -f "${IMAGE}" ]] || { echo "[ERROR] ${IMAGE} not found. Run: ./build-image.sh --target ${TARGET}"; exit 1; }
 export AWS_REGION
+if [[ -n "${AWS_TAGS}" ]]; then
+    IFS=',' read -ra _tags <<<"${AWS_TAGS}"
+    for _t in "${_tags[@]}"; do
+        [[ "${_t}" =~ ^[^=]+=.*$ ]] || { echo "[ERROR] AWS_TAGS entry '${_t}' is not Key=Value"; exit 1; }
+    done
+fi
 
 echo "[1/5] Checking AWS credentials..."
 aws sts get-caller-identity --query 'Arn' --output text
@@ -91,6 +100,20 @@ while true; do
 done
 echo "  - Snapshot: ${SNAPSHOT_ID}"
 
+# tag_resources <region> <resource-id>...: apply AWS_TAGS (no-op when unset)
+tag_resources() {
+    local region="$1"; shift
+    [[ -n "${AWS_TAGS}" ]] || return 0
+    local tag_args=() pair
+    IFS=',' read -ra pairs <<<"${AWS_TAGS}"
+    for pair in "${pairs[@]}"; do
+        [[ "${pair}" == *=* ]] || { echo "[ERROR] AWS_TAGS entry '${pair}' is not Key=Value"; exit 1; }
+        tag_args+=("Key=${pair%%=*},Value=${pair#*=}")
+    done
+    aws ec2 create-tags --region "${region}" --resources "$@" --tags "${tag_args[@]}"
+    echo "  - Tagged $* (${AWS_TAGS})"
+}
+
 # 4. Register the AMI. bootc-image-builder disks boot with BIOS or UEFI, so prefer UEFI.
 echo "[4/5] Registering AMI ${AMI_NAME}..."
 AMI_ID=$(aws ec2 register-image \
@@ -103,6 +126,22 @@ AMI_ID=$(aws ec2 register-image \
     --root-device-name /dev/xvda \
     --block-device-mappings "DeviceName=/dev/xvda,Ebs={SnapshotId=${SNAPSHOT_ID},DeleteOnTermination=true,VolumeType=gp3}" \
     --query 'ImageId' --output text)
+tag_resources "${AWS_REGION}" "${SNAPSHOT_ID}" "${AMI_ID}"
+
+# wait_for_ami <region> <ami-id>: block until the AMI is "available" (the AWS waiter gives up after
+# ~10 minutes, so retry while it's still "pending"; fail on any other state)
+wait_for_ami() {
+    local region="$1" ami="$2" state
+    until aws ec2 wait image-available --region "${region}" --image-ids "${ami}" 2>/dev/null; do
+        state=$(aws ec2 describe-images --region "${region}" --image-ids "${ami}" \
+            --query 'Images[0].State' --output text)
+        [[ "${state}" == "pending" ]] || { echo "[ERROR] AMI ${ami} in ${region} ended in state '${state}'"; exit 1; }
+        echo "  - ${ami} still pending..."
+    done
+}
+echo "  - Waiting for ${AMI_ID} to become available..."
+wait_for_ami "${AWS_REGION}" "${AMI_ID}"
+echo "  - ${AMI_ID} is available"
 
 # 5. Clean up the intermediate object
 if [[ "${KEEP_S3_OBJECT}" != "true" ]]; then
@@ -114,7 +153,6 @@ fi
 declare -A COPIES=()
 if [[ -n "${COPY_TO_REGIONS}" ]]; then
     echo "[6/6] Copying ${AMI_ID} to: ${COPY_TO_REGIONS}"
-    aws ec2 wait image-available --image-ids "${AMI_ID}"
     for region in ${COPY_TO_REGIONS}; do
         [[ "${region}" != "${AWS_REGION}" ]] || continue
         COPIES[${region}]=$(aws ec2 copy-image --region "${region}" \
@@ -124,18 +162,16 @@ if [[ -n "${COPY_TO_REGIONS}" ]]; then
         echo "  - ${region}: ${COPIES[${region}]} (copying)"
     done
     for region in "${!COPIES[@]}"; do
-        # The waiter gives up after ~10 minutes; copies can take longer, so retry until it succeeds
-        until aws ec2 wait image-available --region "${region}" --image-ids "${COPIES[${region}]}" 2>/dev/null; do
-            state=$(aws ec2 describe-images --region "${region}" --image-ids "${COPIES[${region}]}" \
-                --query 'Images[0].State' --output text)
-            [[ "${state}" == "pending" ]] || { echo "[ERROR] Copy to ${region} ended in state '${state}'"; exit 1; }
-        done
+        wait_for_ami "${region}" "${COPIES[${region}]}"
         echo "  - ${region}: ${COPIES[${region}]} available"
+        COPY_SNAP=$(aws ec2 describe-images --region "${region}" --image-ids "${COPIES[${region}]}" \
+            --query 'Images[0].BlockDeviceMappings[0].Ebs.SnapshotId' --output text)
+        tag_resources "${region}" "${COPIES[${region}]}" "${COPY_SNAP}"
     done
 fi
 
 echo "=========================================================="
-echo "AMI registered: ${AMI_ID} (${AMI_NAME}) in ${AWS_REGION}"
+echo "AMI available: ${AMI_ID} (${AMI_NAME}) in ${AWS_REGION} (private to this account)"
 for region in "${!COPIES[@]}"; do
     echo "AMI copied:     ${COPIES[${region}]} in ${region}"
 done

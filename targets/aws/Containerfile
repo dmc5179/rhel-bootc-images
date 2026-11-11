@@ -1,6 +1,8 @@
 # Target: aws — RHEL 10 bootc image customized for Amazon EC2.
 # Build context is the repo root (see build-image.sh).
-FROM registry.redhat.io/rhel10/rhel-bootc:latest
+# RHEL minor version of the base image: ./build-image.sh --rhel-version 10.2 (default: latest)
+ARG RHEL_BOOTC_TAG=latest
+FROM registry.redhat.io/rhel10/rhel-bootc:${RHEL_BOOTC_TAG}
 
 # cloud-init handles EC2 provisioning (hostname, default user, SSH key pair from instance metadata).
 RUN --mount=type=bind,source=lib/rhsm-dnf-install.sh,target=/tmp/rhsm-dnf-install.sh,z \

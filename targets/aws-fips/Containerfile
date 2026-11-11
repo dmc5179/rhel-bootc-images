@@ -3,7 +3,9 @@
 # (RHEL 10 "Using image mode for RHEL", chapter 11). RHEL 10 has no fips-mode-setup and can't
 # switch to FIPS after installation, so it must be baked into the image.
 # Build context is the repo root (see build-image.sh).
-FROM registry.redhat.io/rhel10/rhel-bootc:latest
+# RHEL minor version of the base image: ./build-image.sh --rhel-version 10.2 (default: latest)
+ARG RHEL_BOOTC_TAG=latest
+FROM registry.redhat.io/rhel10/rhel-bootc:${RHEL_BOOTC_TAG}
 
 # cloud-init handles EC2 provisioning (hostname, default user, SSH key pair from instance metadata).
 # crypto-policies-scripts provides update-crypto-policies (not installed by default in RHEL 10).

@@ -28,7 +28,8 @@ Artifacts land in `output/<target>/`, for example `output/azure/vpc/disk.vhd`.
 
 ```
 build-image.sh              Main entry point (--target, --type, --pull-secret, --config, --no-package,
-                            --no-rechunk, --max-layers, --skip-build, --host-network)
+                            --no-rechunk, --max-layers, --skip-build, --host-network,
+                            --rhel-version, --upload)
 update-image.sh             Update an existing image (dnf upgrade, --install), flatten it, report changes
 rhsm-credentials.sh         Prompt for and cache RHSM credentials (--status, --clear)
 lib/rhsm-dnf-install.sh     Shared in-build package installer (register → dnf install/upgrade → unregister → clean)
@@ -55,6 +56,13 @@ config.toml                 Optional bootc-image-builder config (break-glass use
 All cloud targets enable `cloud-init.target` explicitly, since installing the package in a
 container build doesn't enable it.
 
+### Pinning the RHEL minor version
+
+`registry.redhat.io/rhel10/rhel-bootc:latest` follows the newest RHEL 10 minor release. To build on a
+specific one, pass `--rhel-version`, e.g. `./build-image.sh --target aws-fips-bastion --rhel-version 10.2`.
+It pins the base image and the rechunk tool, and the shared installer locks dnf to the base image's
+release (`subscription-manager release --set`), so packages come from the same minor release.
+
 ### Uploading
 
 Some targets include an `upload.sh`. Settings go in `targets/<name>/upload.env` (gitignored;
@@ -67,6 +75,15 @@ copy `upload.env.example`). Credentials are never stored in the repo.
 | `vmware` | `targets/vmware/upload.sh` | `govc import.vmdk` → `vm.create` (EFI, pvscsi, vmxnet3) → optional cloud-init user-data via guestinfo | `govc`, vCenter login (password prompted) |
 
 For Azure, the upload steps live in a separate repo.
+
+`build-image.sh` only builds locally. The upload script is what puts the image in the cloud, and it
+waits until the image is ready to use: the AWS script waits for the AMI to be `available` (and for
+any region copies); GCP's `gcloud compute images create` returns once the image is `READY`. Either
+run it yourself after the build (the build prints the command), or add `--upload` to run it straight
+after the build, with cloud credentials already in the environment.
+
+The AWS script's `AWS_TAGS="Key=Value,..."` tags the snapshot and AMI (and copies), e.g. so a
+consumer's teardown can find them. AMIs are always registered private to the account.
 
 ### Flattened images (rechunk)
 

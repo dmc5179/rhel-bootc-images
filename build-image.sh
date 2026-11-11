@@ -23,6 +23,8 @@ BUILD_NET_ARGS=()
 RECHUNK="true"
 MAX_LAYERS=""
 SKIP_BUILD="false"
+RHEL_VERSION=""
+UPLOAD="false"
 
 list_targets() {
     for dir in "${TARGETS_DIR}"/*/; do
@@ -62,6 +64,14 @@ Options:
                    filesystem, so files removed or replaced by later build steps (old RPM
                    versions) aren't left in lower layers for scanners to flag.
   --max-layers N   Number of layers rechunk produces (default: the tool's default).
+  --rhel-version X.Y
+                   Pin the RHEL minor version of the base image, e.g. 10.2
+                   (registry.redhat.io/rhel10/rhel-bootc:10.2; also used for the rechunk
+                   tool). Default: latest. Packages installed during the build come from the
+                   same minor release.
+  --upload         After building, run targets/NAME/upload.sh, which uploads to the cloud and
+                   waits until the image is ready to use (e.g. AMI "available"). Cloud
+                   credentials must already be in the environment (e.g. an AWS profile).
   --skip-build     Don't build; make disk images from the existing local
                    localhost/rhel10-NAME:latest (e.g. after update-image.sh).
   --list-targets   List available targets.
@@ -135,6 +145,14 @@ while [[ $# -gt 0 ]]; do
         --skip-build)
             SKIP_BUILD="true"
             ;;
+        --upload)
+            UPLOAD="true"
+            ;;
+        --rhel-version)
+            [[ $# -gt 1 && "$2" =~ ^[0-9]+\.[0-9]+$ ]] || { echo "[ERROR] --rhel-version requires X.Y, e.g. 10.2"; exit 1; }
+            RHEL_VERSION="$2"
+            shift
+            ;;
         --list-targets)
             list_targets
             exit 0
@@ -197,6 +215,11 @@ if [[ "${PACKAGE}" == "true" && " ${TYPES[*]} " == *" vhd "* ]]; then
     command -v zstd >/dev/null 2>&1 || { echo "[ERROR] zstd is required to package VHDs (or pass --no-package). Run: sudo dnf install -y zstd"; exit 1; }
 fi
 
+if [[ "${UPLOAD}" == "true" && ! -x "${TARGET_DIR}/upload.sh" ]]; then
+    echo "[ERROR] --upload: target '${TARGET}' has no upload.sh."
+    exit 1
+fi
+
 if [[ -n "${CONFIG_TOML}" ]] && grep -q 'REPLACE_WITH_YOUR_PUBLIC_KEY' "${CONFIG_TOML}"; then
     echo "[ERROR] ${CONFIG_TOML} still contains the placeholder SSH key. Edit it before building."
     exit 1
@@ -238,6 +261,13 @@ else
     exit 1
 fi
 
+BASE_ARGS=()
+if [[ -n "${RHEL_VERSION}" ]]; then
+    BASE_ARGS=(--build-arg "RHEL_BOOTC_TAG=${RHEL_VERSION}")
+    RECHUNK_TOOL_IMAGE="registry.redhat.io/rhel10/rhel-bootc:${RHEL_VERSION}"
+    echo "  - Base image pinned to registry.redhat.io/rhel10/rhel-bootc:${RHEL_VERSION}"
+fi
+
 # shellcheck source=lib/rechunk.sh
 . "${SCRIPT_DIR}/lib/rechunk.sh"
 
@@ -263,7 +293,7 @@ else
         # Children start FROM a parent image that was just built locally, so don't try to pull it
         PULL_POLICY="newer"
         [[ "${t}" == "${BUILD_CHAIN[0]}" ]] || PULL_POLICY="never"
-        sudo podman build --pull="${PULL_POLICY}" "${BUILD_NET_ARGS[@]}" "${AUTH_ARGS[@]}" "${SECRET_ARGS[@]}" \
+        sudo podman build --pull="${PULL_POLICY}" "${BUILD_NET_ARGS[@]}" "${AUTH_ARGS[@]}" "${SECRET_ARGS[@]}" "${BASE_ARGS[@]}" \
             -t "localhost/rhel10-${t}:${tag}" -f "${TARGETS_DIR}/${t}/Containerfile" "${SCRIPT_DIR}"
     done
 
@@ -378,5 +408,15 @@ for archive in "${PACKAGES[@]}"; do
     echo "Transfer:  ${archive#"${SCRIPT_DIR}/"} (+ .sha256)"
     echo "           unpack with: sha256sum -c $(basename "${archive}").sha256 && tar -xf $(basename "${archive}")"
 done
-[[ -x "${TARGET_DIR}/upload.sh" ]] && echo "Upload:    ${TARGET_DIR#"${SCRIPT_DIR}/"}/upload.sh (see --help)"
+if [[ -x "${TARGET_DIR}/upload.sh" && "${UPLOAD}" != "true" ]]; then
+    echo "The image is only built locally; it isn't in the cloud yet. Next, run:"
+    echo "  ${TARGET_DIR#"${SCRIPT_DIR}/"}/upload.sh"
+    echo "It uploads, registers, and waits until the image is ready to use (see --help)."
+fi
 echo "=========================================================="
+
+# 7. Optional: upload and wait until the cloud image is ready
+if [[ "${UPLOAD}" == "true" ]]; then
+    echo "[5/5] Uploading with ${TARGET_DIR#"${SCRIPT_DIR}/"}/upload.sh..."
+    exec "${TARGET_DIR}/upload.sh"
+fi

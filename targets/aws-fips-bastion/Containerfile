@@ -6,9 +6,12 @@ FROM localhost/rhel10-aws-fips:latest
 # Tooling for disconnected OpenShift installs and general admin work.
 # nmstate provides nmstatectl, which `openshift-install agent create image` needs when
 # agent-config sets networkConfig. OpenShift clients stay out (they're version-specific).
+# acl: mirror-registry needs it on RHEL 10. podman, skopeo, jq and rhc ship in the base image today;
+# they're listed so a future base change can't silently drop them.
 RUN --mount=type=bind,source=lib/rhsm-dnf-install.sh,target=/tmp/rhsm-dnf-install.sh,z \
     --mount=type=secret,id=rhsm_user --mount=type=secret,id=rhsm_pass --mount=type=secret,id=rhsm_org \
-    sh /tmp/rhsm-dnf-install.sh wget unzip nmstate xorriso tmux vim-enhanced git python3-pip awscli2 bash-completion
+    sh /tmp/rhsm-dnf-install.sh wget unzip nmstate xorriso tmux vim-enhanced git python3-pip awscli2 bash-completion \
+        acl podman skopeo jq rhc
 
 # Writable /usr/local and /opt. RHEL 10 bootc base images keep both as read-only image
 # content; restore the traditional links into /var (the base image already creates
@@ -26,5 +29,8 @@ RUN test -z "$(find /usr/local /opt -mindepth 1 ! -type d)" \
 RUN printf '%s\n' 'Defaults    secure_path = /usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin' \
       > /etc/sudoers.d/10-secure-path-usrlocal && \
     chmod 0440 /etc/sudoers.d/10-secure-path-usrlocal
+
+# fapolicyd must not be in this image: consumers install it deliberately as part of their tests
+RUN ! rpm -q fapolicyd || { echo "fapolicyd must not be installed in this image" >&2; exit 1; }
 
 RUN bootc container lint

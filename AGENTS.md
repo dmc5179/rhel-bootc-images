@@ -74,6 +74,14 @@ The working directory is still named `composer-cli`; the user will rename it to
   `/usr/lib/tmpfiles.d` entries in the target Containerfile.
 - **Parse `qemu-img info` JSON with `jq` using top-level keys only.** qemu 8+ adds nested
   `children` entries with their own `format`/`virtual-size`, which breaks grep-based parsing.
+- **`rhel-bootc:latest` moves to new minor releases** (it was 10.3 by 2026-11-11). Use
+  `build-image.sh --rhel-version X.Y` to pin; base targets take `ARG RHEL_BOOTC_TAG`. While
+  registered, the shared installer runs `subscription-manager release --set=<base VERSION_ID>`, so
+  packages match the base (verified: a 10.2 bastion build had 0 `el10_3` packages). On a RHEL build
+  host that passes its own subscription through (no registration), the lock doesn't apply.
+- **`build-image.sh` doesn't touch the cloud.** The target's `upload.sh` uploads and waits until the
+  image is usable (AWS: `wait_for_ami` until `available`, retrying past the AWS waiter's ~10 min
+  limit; GCP: `gcloud compute images create` is synchronous). `--upload` chains it after the build.
 - **Images are flattened by default.** `build-image.sh` builds the final target as `:unchunked`
   and rechunks it into `:latest` (`--no-rechunk` to skip). Verified: a file added in one layer and
   deleted in the next was in 2 layers before rechunk and 0 after; a real kernel update shrank the
@@ -140,3 +148,4 @@ Keep this list current: check items off when done, add new ones as they come up.
 - [x] Evaluated RHEM Image Builder on OpenShift (2026-11-09; `docs/rhem-image-builder-evaluation.md`): not a fit. No Containerfile input, no AMI/VHD/GCE output, always adds the RHEM agent; its value is fleet management of agent-enrolled hosts. A Tekton pipeline running our scripts is the better OpenShift path (reuse RHEM's privileged-SCC and entitlement-secret patterns)
 - [x] First real build of `--target generic` (2026-11-09): flattened, qcow2 10 GiB virtual / ~1.06 GB on disk, `qemu-img check` clean; no RHSM prompt after fixing RHSM detection to ignore commented lines
 - [x] Local QEMU boot test of the generic qcow2 (2026-11-09): reached the login prompt with both BIOS (SeaBIOS) and UEFI (OVMF, no Secure Boot) firmware. Commands are in the README section "Boot-testing a disk image locally"
+- [x] RHEL 10.2 `aws-fips-bastion` AMI rebuilt for the openshift5-disconnected session in its new AWS account (2026-11-11): `--rhel-version 10.2` (0 el10_3 packages), `acl` added, fapolicyd guard, AMI/snapshot tagged via `AWS_TAGS`, private; `upload.sh` now waits for `available`. New `build-image.sh --upload`

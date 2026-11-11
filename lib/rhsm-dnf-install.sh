@@ -70,6 +70,9 @@ if [ -s /run/secrets/rhsm_user ] && [ -s /run/secrets/rhsm_pass ]; then
         subscription-manager register --username="$(cat /run/secrets/rhsm_user)" \
             --password="$(cat /run/secrets/rhsm_pass)"
     fi
+    # Install from the base image's own minor release (e.g. 10.2), not the newest one, so a
+    # pinned base (build-image.sh --rhel-version) doesn't get packages from a later release
+    subscription-manager release --set="$(. /etc/os-release && echo "${VERSION_ID}")"
 fi
 
 if [ "${UPGRADE}" -eq 1 ]; then
