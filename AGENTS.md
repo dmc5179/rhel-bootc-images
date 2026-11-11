@@ -115,9 +115,8 @@ Keep this list current: check items off when done, add new ones as they come up.
 - [ ] Decide whether to add `WALinuxAgent` to `targets/azure/Containerfile` (needed for Azure VM extensions)
 - [ ] Boot-test the Azure VHD locally (e.g. libvirt/qemu) before transfer
 - [ ] Verify the existing Azure image has cloud-init enabled; rebuild `--target azure` with the explicit `cloud-init.target` enable
-- [ ] First real build of `--target aws` and `--target vmware` (check lint is clean)
+- [ ] First real build of `--target vmware` (check lint is clean). (`aws` is covered: `aws-fips` = `aws` + FIPS, built as root twice and verified on running instances)
 - [ ] Test `targets/vmware/upload.sh` once vCenter access is available; confirm EFI + pvscsi boot (fall back to `VM_FIRMWARE=bios`/`VM_DISK_CONTROLLER=lsilogic` if not), and check the `rhel10_64Guest` guest ID availability
-- [ ] First real (root) run of `update-image.sh` (verified rootless only)
 - [ ] Prototype a Tekton (OpenShift Pipelines) pipeline that runs our build: Containerfile build → rechunk → push to Quay → bootc-image-builder. Use a privileged SCC scoped to the pipeline service account and RHEL entitlements from the cluster (`etc-pki-entitlement` in `openshift-config-managed`); consider CycloneDX SBOMs for Trusted Profile Analyzer. Start from the community examples in Red Hat article 7134398 (not supported by Red Hat). See `docs/rhem-image-builder-evaluation.md`
 
 ### Done
@@ -149,3 +148,4 @@ Keep this list current: check items off when done, add new ones as they come up.
 - [x] First real build of `--target generic` (2026-11-09): flattened, qcow2 10 GiB virtual / ~1.06 GB on disk, `qemu-img check` clean; no RHSM prompt after fixing RHSM detection to ignore commented lines
 - [x] Local QEMU boot test of the generic qcow2 (2026-11-09): reached the login prompt with both BIOS (SeaBIOS) and UEFI (OVMF, no Secure Boot) firmware. Commands are in the README section "Boot-testing a disk image locally"
 - [x] RHEL 10.2 `aws-fips-bastion` AMI rebuilt for the openshift5-disconnected session in its new AWS account (2026-11-11): `--rhel-version 10.2` (0 el10_3 packages), `acl` added, fapolicyd guard, AMI/snapshot tagged via `AWS_TAGS`, private; `upload.sh` now waits for `available`. New `build-image.sh --upload`
+- [x] First root run of `update-image.sh` (2026-11-11): `--target generic --host-network` on the 2026-11-09 image; 2 changes (curl, libcurl el10_2.7 -> el10_2.8), stayed 10.2 via the release lock (0 el10_3 packages), flattened, lint clean, one kernel, no RHSM identity, report in `output/generic/update-<timestamp>.txt`
